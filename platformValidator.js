@@ -1,97 +1,163 @@
 // ============================================================
 // platformValidator.js
-// Tests API connectivity for Shopify and WooCommerce
+// Real API validation for Shopify and WooCommerce
 // ============================================================
 
-const https = require("https");
-const http  = require("http");
+/**
+ * Validate Shopify credentials by calling the Shop API
+ * Returns shop info if valid, throws error if invalid
+ */
+async function validateShopify({ storeUrl, apiKey, accessToken }) {
+  if (!apiKey || !accessToken) {
+    throw new Error("API Key and Access Token are required");
+  }
+
+  // Clean up store URL — extract just the domain
+  let domain = storeUrl
+    .replace(/^https?:\/\//, "")  // remove https://
+    .replace(/\/$/, "")            // remove trailing slash
+    .split("/")[0];                // take only domain part
+
+  // Build Shopify API URL
+  const url = `https://${domain}/admin/api/2024-01/shop.json`;
+
+  try {
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        "X-Shopify-Access-Token": accessToken,
+        "Content-Type": "application/json",
+      },
+      signal: AbortSignal.timeout(10000), // 10 second timeout
+    });
+
+    if (response.status === 401) {
+      throw new Error("Invalid credentials. Please check your API Key and Access Token.");
+    }
+
+    if (response.status === 403) {
+      throw new Error("Access denied. Make sure your app has the correct permissions.");
+    }
+
+    if (response.status === 404) {
+      throw new Error("Store not found. Please check your store URL.");
+    }
+
+    if (!response.ok) {
+      throw new Error(`Shopify returned error ${response.status}. Please check your credentials.`);
+    }
+
+    const data = await response.json();
+
+    if (!data.shop) {
+      throw new Error("Could not retrieve store information.");
+    }
+
+    // Return useful shop info
+    return {
+      name: data.shop.name,
+      email: data.shop.email,
+      domain: data.shop.domain,
+      currency: data.shop.currency,
+      country: data.shop.country_name,
+      plan: data.shop.plan_display_name,
+    };
+
+  } catch (err) {
+    // Re-throw our custom errors
+    if (err.message && !err.message.includes("fetch")) {
+      throw err;
+    }
+    // Network/timeout errors
+    throw new Error("Could not connect to your store. Please check your store URL and try again.");
+  }
+}
 
 /**
- * Generic HTTPS/HTTP request helper (no extra deps)
+ * Validate WooCommerce credentials by calling the System Status API
+ * Returns store info if valid, throws error if invalid
  */
-function request(url, options = {}) {
-  return new Promise((resolve, reject) => {
-    const parsed = new URL(url);
-    const isHttps = parsed.protocol === "https:";
-    const lib = isHttps ? https : http;
-
-    const req = lib.request(
-      {
-        hostname: parsed.hostname,
-        port: parsed.port || (isHttps ? 443 : 80),
-        path: parsed.pathname + parsed.search,
-        method: options.method || "GET",
-        headers: options.headers || {},
-        timeout: 8000,
-      },
-      (res) => {
-        let body = "";
-        res.on("data", (chunk) => (body += chunk));
-        res.on("end", () => {
-          try { body = JSON.parse(body); } catch {}
-          resolve({ status: res.statusCode, body });
-        });
-      }
-    );
-
-    req.on("timeout", () => { req.destroy(); reject(new Error("Request timed out")); });
-    req.on("error", reject);
-    req.end();
-  });
-}
-
-// ── Shopify ───────────────────────────────────────────────────
-async function validateShopify({ storeUrl, apiKey, accessToken }) {
-  if (!storeUrl || !apiKey || !accessToken) {
-    throw new Error("Missing Shopify credentials");
-  }
-
-  // Normalize URL
-  const base = storeUrl.replace(/\/$/, "");
-  const url  = `${base}/admin/api/2024-01/shop.json`;
-
-  const { status, body } = await request(url, {
-    headers: {
-      "X-Shopify-Access-Token": accessToken,
-      "Content-Type": "application/json",
-    },
-  });
-
-  if (status === 401) throw new Error("Invalid Shopify credentials — check your Access Token");
-  if (status === 404) throw new Error("Store not found — check your store URL");
-  if (status !== 200) throw new Error(`Shopify API returned status ${status}`);
-
-  return {
-    shopName:   body?.shop?.name,
-    shopDomain: body?.shop?.domain,
-    shopEmail:  body?.shop?.email,
-    currency:   body?.shop?.currency,
-  };
-}
-
-// ── WooCommerce ───────────────────────────────────────────────
 async function validateWooCommerce({ storeUrl, consumerKey, consumerSecret }) {
-  if (!storeUrl || !consumerKey || !consumerSecret) {
-    throw new Error("Missing WooCommerce credentials");
+  if (!consumerKey || !consumerSecret) {
+    throw new Error("Consumer Key and Consumer Secret are required");
   }
 
-  const base = storeUrl.replace(/\/$/, "");
-  // Basic auth via query params (WooCommerce REST API v3)
-  const params = new URLSearchParams({ consumer_key: consumerKey, consumer_secret: consumerSecret });
-  const url    = `${base}/wp-json/wc/v3/system_status?${params}`;
+  // Clean up store URL
+  let baseUrl = storeUrl.replace(/\/$/, ""); // remove trailing slash
 
-  const { status, body } = await request(url);
+  // Build WooCommerce API URL
+  const url = `${baseUrl}/wp-json/wc/v3/system_status`;
 
-  if (status === 401) throw new Error("Invalid WooCommerce credentials");
-  if (status === 404) throw new Error("WooCommerce REST API not found — check URL and that REST API is enabled");
-  if (status !== 200) throw new Error(`WooCommerce API returned status ${status}`);
+  // WooCommerce uses Basic Auth with consumer key and secret
+  const credentials = Buffer.from(`${consumerKey}:${consumerSecret}`).toString("base64");
 
-  return {
-    wooVersion:  body?.environment?.version,
-    wpVersion:   body?.environment?.wp_version,
-    storeName:   body?.settings?.store_name,
-    timezone:    body?.settings?.timezone,
-  };
+  try {
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        "Authorization": `Basic ${credentials}`,
+        "Content-Type": "application/json",
+      },
+      signal: AbortSignal.timeout(10000), // 10 second timeout
+    });
+
+    if (response.status === 401) {
+      throw new Error("Invalid credentials. Please check your Consumer Key and Secret.");
+    }
+
+    if (response.status === 403) {
+      throw new Error("Access denied. Make sure your API key has Read/Write permissions.");
+    }
+
+    if (response.status === 404) {
+      // Try the products endpoint as fallback
+      const fallbackUrl = `${baseUrl}/wp-json/wc/v3/products?per_page=1`;
+      const fallbackRes = await fetch(fallbackUrl, {
+        method: "GET",
+        headers: {
+          "Authorization": `Basic ${credentials}`,
+          "Content-Type": "application/json",
+        },
+        signal: AbortSignal.timeout(10000),
+      });
+
+      if (fallbackRes.status === 401) {
+        throw new Error("Invalid credentials. Please check your Consumer Key and Secret.");
+      }
+
+      if (!fallbackRes.ok) {
+        throw new Error("Store not found or WooCommerce REST API is not enabled. Check your permalink settings.");
+      }
+
+      return {
+        name: baseUrl,
+        status: "connected",
+        note: "WooCommerce store connected successfully",
+      };
+    }
+
+    if (!response.ok) {
+      throw new Error(`WooCommerce returned error ${response.status}. Please check your credentials.`);
+    }
+
+    const data = await response.json();
+
+    // Return useful store info
+    return {
+      name: data.environment?.site_url || baseUrl,
+      version: data.environment?.wc_version || "Unknown",
+      currency: data.settings?.currency || "Unknown",
+      status: "connected",
+    };
+
+  } catch (err) {
+    // Re-throw our custom errors
+    if (err.message && !err.message.includes("fetch") && !err.message.includes("abort")) {
+      throw err;
+    }
+    // Network/timeout errors
+    throw new Error("Could not connect to your store. Please check your store URL and try again.");
+  }
 }
 
 module.exports = { validateShopify, validateWooCommerce };
