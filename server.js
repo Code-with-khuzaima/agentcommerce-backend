@@ -9,15 +9,21 @@ const cors = require("cors");
 
 const app = express();
 
-app.use(cors()); // 🔥 ADD THIS LINE
-app.use(express.json());
-
+// ------------------- CONFIG -------------------
+const FRONTEND_URL = "https://agentcommerce-frontend-git-master-code-with-khuzaimas-projects.vercel.app";
 const JWT_SECRET = process.env.JWT_SECRET || "agentcomerce_jwt_secret_2024";
 const DB_PATH = path.join(__dirname, "agentcommerce.db");
 
 let _db = null;
 
-// Initialize SQL.js
+// ------------------- MIDDLEWARE -------------------
+app.use(cors({
+  origin: FRONTEND_URL,
+  credentials: true
+}));
+app.use(express.json());
+
+// ------------------- DATABASE -------------------
 async function getAuthDb() {
   if (_db) return _db;
 
@@ -26,18 +32,14 @@ async function getAuthDb() {
     const SQL = await initSqlJs();
 
     if (fs.existsSync(DB_PATH)) {
-      try {
-        const fileBuffer = fs.readFileSync(DB_PATH);
-        _db = new SQL.Database(fileBuffer);
-        console.log("Database loaded from file:", DB_PATH);
-      } catch (err) {
-        console.error("Failed to read DB file, creating new DB:", err);
-        _db = new SQL.Database();
-      }
+      const fileBuffer = fs.readFileSync(DB_PATH);
+      _db = new SQL.Database(fileBuffer);
+      console.log("Database loaded from file:", DB_PATH);
     } else {
       console.log("DB file not found, creating new DB");
       _db = new SQL.Database();
     }
+
     return _db;
   } catch (err) {
     console.error("Error initializing SQL.js:", err);
@@ -45,7 +47,6 @@ async function getAuthDb() {
   }
 }
 
-// Save in-memory DB to file
 function saveAuthDb() {
   if (!_db) return;
   try {
@@ -57,7 +58,6 @@ function saveAuthDb() {
   }
 }
 
-// Ensure table exists
 async function ensureUsersTable() {
   const db = await getAuthDb();
   db.run(`CREATE TABLE IF NOT EXISTS client_users (
@@ -72,7 +72,7 @@ async function ensureUsersTable() {
   console.log("client_users table ensured");
 }
 
-// JWT authentication middleware
+// ------------------- AUTH MIDDLEWARE -------------------
 function requireAuth(req, res, next) {
   const header = req.headers.authorization;
   if (!header || !header.startsWith("Bearer ")) {
@@ -86,15 +86,13 @@ function requireAuth(req, res, next) {
   }
 }
 
-// Routes
+// ------------------- ROUTES -------------------
 async function registerRoutes(app) {
   await ensureUsersTable();
 
   // Create client
   app.post("/api/auth/create-client", async (req, res) => {
     const { email, password, store_id } = req.body;
-    console.log("Create client request:", req.body);
-
     if (!email || !password || !store_id) {
       return res.status(400).json({ message: "email, password and store_id are required" });
     }
@@ -104,18 +102,16 @@ async function registerRoutes(app) {
 
       const stmt = db.prepare("SELECT id FROM client_users WHERE email = ?");
       stmt.bind([email.toLowerCase().trim()]);
-      let exists = stmt.step();
+      const exists = stmt.step();
       stmt.free();
 
       if (exists) return res.status(400).json({ message: "Email already registered" });
 
       const hash = await bcrypt.hash(password, 10);
-      db.run(
-        "INSERT INTO client_users (email, password_hash, store_id) VALUES (?, ?, ?)",
+      db.run("INSERT INTO client_users (email, password_hash, store_id) VALUES (?, ?, ?)",
         [email.toLowerCase().trim(), hash, store_id]
       );
       saveAuthDb();
-      console.log("Client account created successfully:", email);
 
       res.status(201).json({ success: true, message: "Client account created successfully" });
     } catch (err) {
@@ -127,15 +123,12 @@ async function registerRoutes(app) {
   // Login
   app.post("/api/auth/login", async (req, res) => {
     const { email, password } = req.body;
-    console.log("Login request:", req.body);
-
     if (!email || !password) {
       return res.status(400).json({ message: "Email and password are required" });
     }
 
     try {
       const db = await getAuthDb();
-
       const stmt = db.prepare("SELECT * FROM client_users WHERE email = ? AND is_active = 1");
       stmt.bind([email.toLowerCase().trim()]);
 
@@ -161,7 +154,7 @@ async function registerRoutes(app) {
     }
   });
 
-  // Protected dashboard example
+  // Dashboard (protected)
   app.get("/api/client/dashboard", requireAuth, async (req, res) => {
     res.json({
       success: true,
@@ -170,11 +163,12 @@ async function registerRoutes(app) {
   });
 }
 
-// Start server
+// ------------------- START SERVER -------------------
 const PORT = process.env.PORT || 4000;
-registerRoutes(app).then(() => {
-  app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
-}).catch(err => {
-  console.error("Failed to register routes:", err);
-});
-
+registerRoutes(app)
+  .then(() => {
+    app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+  })
+  .catch(err => {
+    console.error("Failed to register routes:", err);
+  });
