@@ -1,300 +1,78 @@
+// server.js
 require("dotenv").config();
 const express = require("express");
-const cors = require("cors");
-const helmet = require("helmet");
-const rateLimit = require("express-rate-limit");
-const { body, validationResult } = require("express-validator");
-
-const db = require("./db");
-const { encrypt } = require("./crypto");
-const { sendAdminEmail, sendConfirmationEmail } = require("./email");
-const { validateShopify, validateWooCommerce } = require("./platformValidator");
-
-const app = express();
-const PORT = process.env.PORT || 4000;
-
-const ADMIN_STATUSES = ["pending", "review", "active", "paused", "archived"];
-const PAYMENT_STATUSES = ["pending", "paid", "overdue", "refunded"];
-const SETUP_STATUSES = ["new", "credentials_review", "workflow_building", "widget_installing", "qa_testing", "live"];
-const WORKFLOW_STATUSES = ["not_started", "draft", "ready", "live", "issue"];
-const WIDGET_STATUSES = ["not_installed", "ready", "live", "paused"];
-const PRIORITIES = ["low", "medium", "high", "urgent"];
-
-app.use(helmet());
-const allowedOrigins = (process.env.CORS_ORIGIN || "http://localhost:3000,https://agentcommerce-frontend-git-master-code-with-khuzaimas-projects.vercel.app,https://agentcommerce-frontend.vercel.app")
-  .split(",")
-  .map((origin) => origin.trim())
-  .filter(Boolean);
-
-app.use(cors({
-  origin(origin, callback) {
-    if (!origin || allowedOrigins.includes(origin)) {
-      return callback(null, true);
-    }
-    return callback(new Error("Not allowed by CORS"));
-  },
-}));
-app.use(express.json({ limit: "64kb" }));
-
-const limiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: 60,
-  message: { message: "Too many requests, please try again later." },
-});
-app.use("/api/", limiter);
-
-function validate(req, res, next) {
-  const errors = validationResult(req);
-  if (!errors.isEmpty()) {
-    return res.status(422).json({ message: "Validation failed", errors: errors.array() });
-  }
-  next();
-}
-
-app.get("/api/health", (req, res) => {
-  res.json({ status: "ok", ts: new Date().toISOString() });
-});
-
-app.get("/api/admin/dashboard", async (req, res) => {
-  try {
-    const filters = {
-      search: req.query.search || "",
-      status: req.query.status || "all",
-      plan: req.query.plan || "all",
-      platform: req.query.platform || "all",
-      paymentStatus: req.query.paymentStatus || "all",
-      setupStatus: req.query.setupStatus || "all",
-    };
-
-    const [summary, stores] = await Promise.all([
-      db.getDashboardSummary(),
-      db.listStores(filters),
-    ]);
-
-    res.json({ success: true, summary, stores, filters });
-  } catch (err) {
-    console.error("Admin dashboard error:", err);
-    res.status(500).json({ message: "Failed to load dashboard data." });
-  }
-});
-
-app.get("/api/admin/stores/:id", async (req, res) => {
-  try {
-    const store = await db.getStoreDetails(req.params.id);
-    if (!store) {
-      return res.status(404).json({ message: "Store not found." });
-    }
-    res.json({ success: true, store });
-  } catch (err) {
-    console.error("Admin store detail error:", err);
-    res.status(500).json({ message: "Failed to load store details." });
-  }
-});
-
-app.patch(
-  "/api/admin/stores/:id",
-  [
-    body("status").optional().isIn(ADMIN_STATUSES),
-    body("plan").optional().isIn(["starter", "pro", "enterprise"]),
-    body("paymentStatus").optional().isIn(PAYMENT_STATUSES),
-    body("setupStatus").optional().isIn(SETUP_STATUSES),
-    body("workflowStatus").optional().isIn(WORKFLOW_STATUSES),
-    body("widgetStatus").optional().isIn(WIDGET_STATUSES),
-    body("priority").optional().isIn(PRIORITIES),
-    body("msgCount").optional().isInt({ min: 0 }),
-    body("msgLimit").optional().isInt({ min: 0 }),
-    body("paymentAmount").optional().isInt({ min: 0 }),
-    body("webhookUrl").optional().isString().isLength({ max: 1000 }),
-    body("agentName").optional().isString().isLength({ max: 200 }),
-    body("accentColor").optional().matches(/^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/),
-    body("welcomeMessage").optional().isString().isLength({ max: 300 }),
-    body("internalNotes").optional().isString().isLength({ max: 6000 }),
-  ],
-  validate,
-  async (req, res) => {
-    try {
-      const store = await db.updateStore(req.params.id, req.body);
-      if (!store) {
-        return res.status(404).json({ message: "Store not found." });
-      }
-
-      await db.logEvent(req.params.id, "store_updated", {
-        fields: Object.keys(req.body),
-        at: new Date().toISOString(),
-      });
-
-      res.json({ success: true, store });
-    } catch (err) {
-      console.error("Admin store update error:", err);
-      res.status(500).json({ message: "Failed to update store." });
-    }
-  }
-);
-
-app.post(
-  "/api/admin/stores/:id/logs",
-  [body("event").notEmpty().isString(), body("payload").optional().isObject()],
-  validate,
-  async (req, res) => {
-    try {
-      const store = await db.getSubmissionById(req.params.id);
-      if (!store) {
-        return res.status(404).json({ message: "Store not found." });
-      }
-      await db.logEvent(req.params.id, req.body.event, req.body.payload || {});
-      const updated = await db.getStoreDetails(req.params.id);
-      res.status(201).json({ success: true, store: updated });
-    } catch (err) {
-      console.error("Admin log error:", err);
-      res.status(500).json({ message: "Failed to save log event." });
-    }
-  }
-);
-
-app.post(
-  "/api/validate-credentials",
-  [
-    body("platform").isIn(["shopify", "woocommerce"]),
-    body("storeUrl").isURL({ require_protocol: true }),
-  ],
-  validate,
-  async (req, res) => {
-    const { platform, storeUrl, apiKey, accessToken, consumerKey, consumerSecret } = req.body;
-
-    try {
-      let result;
-      if (platform === "shopify") {
-        result = await validateShopify({ storeUrl, apiKey, accessToken });
-      } else {
-        result = await validateWooCommerce({ storeUrl, consumerKey, consumerSecret });
-      }
-      res.json({ success: true, shopInfo: result });
-    } catch (err) {
-      res.status(400).json({ success: false, message: err.message || "Invalid credentials" });
-    }
-  }
-);
-
-app.post(
-  "/api/submit",
-  [
-    body("storeUrl").isURL({ require_protocol: true }).trim().escape(),
-    body("platform").isIn(["shopify", "woocommerce"]),
-    body("plan").optional().isIn(["starter", "pro", "enterprise"]),
-    body("storeName").notEmpty().trim().escape().isLength({ max: 200 }),
-    body("contactEmail").isEmail().normalizeEmail(),
-    body("categories").optional().isArray(),
-    body("deliveryMethods").optional().isArray(),
-    body("returnPolicy").optional().trim().isLength({ max: 2000 }),
-    body("faqs").optional().trim().isLength({ max: 5000 }),
-    body("notes").optional().trim().isLength({ max: 2000 }),
-    body("qnaPairs").optional().isArray(),
-    body("storeAnswers").optional().isObject(),
-    body("fullDetails").optional().isString().isLength({ max: 12000 }),
-  ],
-  validate,
-  async (req, res) => {
-    const {
-      plan,
-      storeUrl,
-      platform,
-      storeName,
-      contactEmail,
-      apiKey,
-      accessToken,
-      consumerKey,
-      consumerSecret,
-      categories,
-      deliveryMethods,
-      returnPolicy,
-      faqs,
-      notes,
-      qnaPairs,
-      storeAnswers,
-      fullDetails,
-    } = req.body;
-
-    try {
-      const encryptedCredentials = {};
-      if (platform === "shopify") {
-        encryptedCredentials.apiKey = apiKey ? encrypt(apiKey) : null;
-        encryptedCredentials.accessToken = accessToken ? encrypt(accessToken) : null;
-      } else {
-        encryptedCredentials.consumerKey = consumerKey ? encrypt(consumerKey) : null;
-        encryptedCredentials.consumerSecret = consumerSecret ? encrypt(consumerSecret) : null;
-      }
-
-      const submission = await db.createSubmission({
-        storeUrl,
-        platform,
-        storeName,
-        contactEmail,
-        plan: plan || "starter",
-        credentials: JSON.stringify(encryptedCredentials),
-        categories: JSON.stringify(categories || []),
-        deliveryMethods: JSON.stringify(deliveryMethods || []),
-        returnPolicy: returnPolicy || "",
-        faqs: faqs || "",
-        notes: notes || "",
-        storeAnswers: JSON.stringify(storeAnswers || {}),
-        fullDetails: fullDetails || "",
-        qnaCount: Array.isArray(qnaPairs) ? qnaPairs.length : 0,
-      });
-
-      await db.logEvent(submission.id, "submission_created", {
-        storeIdentifier: submission.storeIdentifier,
-        plan: plan || "starter",
-        platform,
-      });
-
-      Promise.all([
-        sendAdminEmail({ submission: { ...req.body, id: submission.id } }),
-        sendConfirmationEmail({ to: contactEmail, storeName }),
-      ]).catch((err) => console.error("Email error:", err));
-
-      res.status(201).json({
-        success: true,
-        submissionId: submission.id,
-        storeId: submission.storeIdentifier,
-        planPrice: submission.planPrice,
-        msgLimit: submission.msgLimit,
-        message: "Submission received. Our team will contact you within 1-2 business days.",
-      });
-    } catch (err) {
-      console.error("Submit error:", err);
-      res.status(500).json({ message: "Failed to process submission. Please try again." });
-    }
-  }
-);
-
-app.use((err, req, res, next) => {
-  console.error(err.stack);
-  res.status(500).json({ message: "Internal server error" });
-});
-
-app.listen(PORT, () => {
-  console.log(`AgentCommerce API running on http://localhost:${PORT}`);
-});
-
-module.exports = app;
-
-
-// ═══════════════════════════════════════════════════════════════
-// CLIENT AUTH ROUTES
-// Run: npm install bcryptjs jsonwebtoken
-// Add to .env: JWT_SECRET=your_secret_here
-// ═══════════════════════════════════════════════════════════════
 const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
-const JWT_SECRET = process.env.JWT_SECRET || "agentcomerce_jwt_secret_change_me";
+const path = require("path");
+const fs = require("fs");
+const cors = require("cors");
 
-// Create users table on init
-db.initDb().then(async () => {
-  const database = await db.getDb ? db.getDb() : null;
-  // Users table is created separately — see initDb extension below
-}).catch(() => {});
+const app = express();
 
-// Middleware to verify JWT
+app.use(cors()); // 🔥 ADD THIS LINE
+app.use(express.json());
+
+const JWT_SECRET = process.env.JWT_SECRET || "agentcomerce_jwt_secret_2024";
+const DB_PATH = path.join(__dirname, "agentcommerce.db");
+
+let _db = null;
+
+// Initialize SQL.js
+async function getAuthDb() {
+  if (_db) return _db;
+
+  try {
+    const initSqlJs = require("sql.js");
+    const SQL = await initSqlJs();
+
+    if (fs.existsSync(DB_PATH)) {
+      try {
+        const fileBuffer = fs.readFileSync(DB_PATH);
+        _db = new SQL.Database(fileBuffer);
+        console.log("Database loaded from file:", DB_PATH);
+      } catch (err) {
+        console.error("Failed to read DB file, creating new DB:", err);
+        _db = new SQL.Database();
+      }
+    } else {
+      console.log("DB file not found, creating new DB");
+      _db = new SQL.Database();
+    }
+    return _db;
+  } catch (err) {
+    console.error("Error initializing SQL.js:", err);
+    throw err;
+  }
+}
+
+// Save in-memory DB to file
+function saveAuthDb() {
+  if (!_db) return;
+  try {
+    const data = _db.export();
+    fs.writeFileSync(DB_PATH, Buffer.from(data));
+    console.log("Database saved to file");
+  } catch (err) {
+    console.error("Failed to save DB:", err);
+  }
+}
+
+// Ensure table exists
+async function ensureUsersTable() {
+  const db = await getAuthDb();
+  db.run(`CREATE TABLE IF NOT EXISTS client_users (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    email TEXT UNIQUE NOT NULL,
+    password_hash TEXT NOT NULL,
+    store_id TEXT NOT NULL,
+    is_active INTEGER DEFAULT 1,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  )`);
+  saveAuthDb();
+  console.log("client_users table ensured");
+}
+
+// JWT authentication middleware
 function requireAuth(req, res, next) {
   const header = req.headers.authorization;
   if (!header || !header.startsWith("Bearer ")) {
@@ -303,116 +81,100 @@ function requireAuth(req, res, next) {
   try {
     req.user = jwt.verify(header.split(" ")[1], JWT_SECRET);
     next();
-  } catch {
-    res.status(401).json({ message: "Invalid or expired token" });
+  } catch (err) {
+    return res.status(401).json({ message: "Invalid or expired token" });
   }
 }
 
-// POST /api/auth/login
-app.post("/api/auth/login", async (req, res) => {
-  const { email, password } = req.body;
-  if (!email || !password) {
-    return res.status(400).json({ message: "Email and password are required" });
-  }
-  try {
-    const { getDb } = require("./db");
-    const database = await getDb();
-    const { queryOne } = require("./db");
+// Routes
+async function registerRoutes(app) {
+  await ensureUsersTable();
 
-    // Find user by email
-    const stmt = database.prepare("SELECT * FROM client_users WHERE email = ? AND is_active = 1");
-    stmt.bind([email.toLowerCase().trim()]);
-    let user = null;
-    if (stmt.step()) user = stmt.getAsObject();
-    stmt.free();
+  // Create client
+  app.post("/api/auth/create-client", async (req, res) => {
+    const { email, password, store_id } = req.body;
+    console.log("Create client request:", req.body);
 
-    if (!user) return res.status(401).json({ message: "Invalid email or password" });
-
-    const valid = await bcrypt.compare(password, user.password_hash);
-    if (!valid) return res.status(401).json({ message: "Invalid email or password" });
-
-    const token = jwt.sign(
-      { id: user.id, email: user.email, store_id: user.store_id },
-      JWT_SECRET,
-      { expiresIn: "30d" }
-    );
-
-    res.json({
-      token,
-      user: { email: user.email, store_id: user.store_id }
-    });
-  } catch (err) {
-    console.error("Login error:", err);
-    res.status(500).json({ message: "Login failed" });
-  }
-});
-
-// POST /api/auth/create-client  (you call this after a client pays)
-app.post("/api/auth/create-client", async (req, res) => {
-  const { email, password, store_id } = req.body;
-  if (!email || !password || !store_id) {
-    return res.status(400).json({ message: "email, password and store_id required" });
-  }
-  try {
-    const { getDb } = require("./db");
-    const database = await getDb();
-
-    // Create table if not exists
-    database.run(`CREATE TABLE IF NOT EXISTS client_users (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      email TEXT UNIQUE NOT NULL,
-      password_hash TEXT NOT NULL,
-      store_id TEXT NOT NULL,
-      is_active INTEGER DEFAULT 1,
-      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-    )`);
-
-    const hash = await bcrypt.hash(password, 10);
-    database.run(
-      "INSERT INTO client_users (email, password_hash, store_id) VALUES (?, ?, ?)",
-      [email.toLowerCase().trim(), hash, store_id]
-    );
-
-    const { saveDb } = require("./db");
-    saveDb();
-
-    res.status(201).json({ success: true, message: "Client account created" });
-  } catch (err) {
-    if (err.message && err.message.includes("UNIQUE")) {
-      return res.status(400).json({ message: "Email already registered" });
+    if (!email || !password || !store_id) {
+      return res.status(400).json({ message: "email, password and store_id are required" });
     }
-    console.error("Create client error:", err);
-    res.status(500).json({ message: "Failed to create account" });
-  }
-});
 
-// GET /api/client/dashboard  (protected — client sees their own store)
-app.get("/api/client/dashboard", requireAuth, async (req, res) => {
-  try {
-    const store = await db.getStoreDetails
-      ? await db.getStoreDetails(req.user.store_id)
-      : null;
+    try {
+      const db = await getAuthDb();
 
-    // Try to find by store_identifier too
-    let storeData = store;
-    if (!storeData) {
-      const { getDb } = require("./db");
-      const database = await getDb();
-      const stmt = database.prepare("SELECT * FROM stores WHERE store_identifier = ? OR id = ?");
-      stmt.bind([req.user.store_id, parseInt(req.user.store_id) || 0]);
-      let row = null;
-      if (stmt.step()) row = stmt.getAsObject();
+      const stmt = db.prepare("SELECT id FROM client_users WHERE email = ?");
+      stmt.bind([email.toLowerCase().trim()]);
+      let exists = stmt.step();
       stmt.free();
-      storeData = row ? db.hydrateStore ? db.hydrateStore(row) : row : null;
+
+      if (exists) return res.status(400).json({ message: "Email already registered" });
+
+      const hash = await bcrypt.hash(password, 10);
+      db.run(
+        "INSERT INTO client_users (email, password_hash, store_id) VALUES (?, ?, ?)",
+        [email.toLowerCase().trim(), hash, store_id]
+      );
+      saveAuthDb();
+      console.log("Client account created successfully:", email);
+
+      res.status(201).json({ success: true, message: "Client account created successfully" });
+    } catch (err) {
+      console.error("Error creating client:", err);
+      res.status(500).json({ message: "Failed to create account: " + err.message });
+    }
+  });
+
+  // Login
+  app.post("/api/auth/login", async (req, res) => {
+    const { email, password } = req.body;
+    console.log("Login request:", req.body);
+
+    if (!email || !password) {
+      return res.status(400).json({ message: "Email and password are required" });
     }
 
+    try {
+      const db = await getAuthDb();
+
+      const stmt = db.prepare("SELECT * FROM client_users WHERE email = ? AND is_active = 1");
+      stmt.bind([email.toLowerCase().trim()]);
+
+      let user = null;
+      if (stmt.step()) user = stmt.getAsObject();
+      stmt.free();
+
+      if (!user) return res.status(401).json({ message: "Invalid email or password" });
+
+      const valid = await bcrypt.compare(password, user.password_hash);
+      if (!valid) return res.status(401).json({ message: "Invalid email or password" });
+
+      const token = jwt.sign(
+        { id: user.id, email: user.email, store_id: user.store_id },
+        JWT_SECRET,
+        { expiresIn: "30d" }
+      );
+
+      res.json({ token, user: { email: user.email, store_id: user.store_id } });
+    } catch (err) {
+      console.error("Login error:", err);
+      res.status(500).json({ message: "Login failed: " + err.message });
+    }
+  });
+
+  // Protected dashboard example
+  app.get("/api/client/dashboard", requireAuth, async (req, res) => {
     res.json({
       success: true,
-      store: storeData,
       user: { email: req.user.email, store_id: req.user.store_id }
     });
-  } catch (err) {
-    console.error("Dashboard error:", err);
-    res.status(500).json({ message: "Failed to load dashboard" });
-  }
+  });
+}
+
+// Start server
+const PORT = process.env.PORT || 4000;
+registerRoutes(app).then(() => {
+  app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+}).catch(err => {
+  console.error("Failed to register routes:", err);
 });
+
