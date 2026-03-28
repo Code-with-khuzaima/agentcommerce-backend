@@ -22,13 +22,24 @@ const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || "agentcommerce_admin_2024";
 const ADMIN_SESSION_SECRET = process.env.ADMIN_SESSION_SECRET || JWT_SECRET;
 const DB_PATH = path.join(__dirname, "agentcommerce.db");
 
-const allowedOrigins = (process.env.CORS_ORIGIN ||
-  "http://localhost:3000,https://agentcommerce-frontend-git-master-code-with-khuzaimas-projects.vercel.app,https://agentcommerce-frontend.vercel.app")
+const allowedOrigins = (process.env.CORS_ORIGIN || "")
   .split(",").map((origin) => origin.trim()).filter(Boolean);
+
+function isAllowedOrigin(origin) {
+  if (!origin) return true;
+  if (allowedOrigins.includes(origin)) return true;
+
+  try {
+    const { hostname } = new URL(origin);
+    return hostname === "localhost" || hostname.endsWith(".vercel.app") || hostname.endsWith(".railway.app");
+  } catch {
+    return false;
+  }
+}
 
 app.use(cors({
   origin(origin, cb) {
-    if (!origin || allowedOrigins.includes(origin)) return cb(null, true);
+    if (isAllowedOrigin(origin)) return cb(null, true);
     return cb(new Error("Not allowed by CORS"));
   },
 }));
