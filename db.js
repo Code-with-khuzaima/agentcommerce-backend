@@ -66,6 +66,15 @@ function queryOne(database, sql, params = []) {
   return queryAll(database, sql, params)[0] || null;
 }
 
+function buildStoreLookupClause(idOrIdentifier) {
+  const raw = String(idOrIdentifier || "").trim();
+  const numeric = Number(raw);
+  if (raw && !Number.isNaN(numeric) && /^\d+$/.test(raw)) {
+    return { sql: "id = ?", params: [numeric] };
+  }
+  return { sql: "store_identifier = ?", params: [raw] };
+}
+
 function getExistingColumns(database, tableName) {
   return queryAll(database, `PRAGMA table_info(${tableName})`).map((col) => col.name);
 }
@@ -279,7 +288,8 @@ async function createSubmission({
 
 async function getSubmissionById(id) {
   const database = await getDb();
-  return hydrateStore(queryOne(database, "SELECT * FROM stores WHERE id = ?", [Number(id)]));
+  const lookup = buildStoreLookupClause(id);
+  return hydrateStore(queryOne(database, `SELECT * FROM stores WHERE ${lookup.sql}`, lookup.params));
 }
 
 async function listStores(filters = {}) {
@@ -339,13 +349,15 @@ async function listStores(filters = {}) {
 
 async function getStoreDetails(id) {
   const database = await getDb();
-  const store = hydrateStore(queryOne(database, "SELECT * FROM stores WHERE id = ?", [Number(id)]));
+  const lookup = buildStoreLookupClause(id);
+  const rawStore = queryOne(database, `SELECT * FROM stores WHERE ${lookup.sql}`, lookup.params);
+  const store = hydrateStore(rawStore);
   if (!store) return null;
 
   const logs = queryAll(
     database,
     "SELECT * FROM integration_logs WHERE store_id = ? ORDER BY datetime(created_at) DESC LIMIT 40",
-    [Number(id)]
+    [Number(store.id)]
   ).map((row) => ({
     id: Number(row.id),
     storeId: Number(row.store_id),
