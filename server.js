@@ -1,6 +1,7 @@
 require("dotenv").config();
 const express = require("express");
 const bcrypt = require("bcryptjs");
+const crypto = require("crypto");
 const jwt = require("jsonwebtoken");
 const path = require("path");
 const fs = require("fs");
@@ -17,12 +18,13 @@ const { validateShopify, validateWooCommerce } = require("./platformValidator");
 const app = express();
 const PORT = process.env.PORT || 4000;
 const JWT_SECRET = process.env.JWT_SECRET || "agentcomerce_jwt_secret_2024";
+const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || "agentcommerce_admin_2024";
+const ADMIN_SESSION_SECRET = process.env.ADMIN_SESSION_SECRET || JWT_SECRET;
 const DB_PATH = path.join(__dirname, "agentcommerce.db");
 
-// ── CORS ──────────────────────────────────────────────────────
 const allowedOrigins = (process.env.CORS_ORIGIN ||
   "http://localhost:3000,https://agentcommerce-frontend-git-master-code-with-khuzaimas-projects.vercel.app,https://agentcommerce-frontend.vercel.app")
-  .split(",").map(o => o.trim()).filter(Boolean);
+  .split(",").map((origin) => origin.trim()).filter(Boolean);
 
 app.use(cors({
   origin(origin, cb) {
@@ -34,7 +36,6 @@ app.use(helmet());
 app.use(express.json({ limit: "64kb" }));
 app.use("/api/", rateLimit({ windowMs: 15 * 60 * 1000, max: 60 }));
 
-// ── ADMIN STATUSES ─────────────────────────────────────────────
 const ADMIN_STATUSES = ["pending", "review", "active", "paused", "archived"];
 const PAYMENT_STATUSES = ["pending", "paid", "overdue", "refunded"];
 const SETUP_STATUSES = ["new", "credentials_review", "workflow_building", "widget_installing", "qa_testing", "live"];
@@ -48,7 +49,6 @@ function validate(req, res, next) {
   next();
 }
 
-// ── AUTH DB HELPERS ────────────────────────────────────────────
 let _authDb = null;
 
 async function getAuthDb() {
@@ -95,39 +95,62 @@ async function createClientUser(email, password, store_id) {
   return true;
 }
 
-// ── AUTH MIDDLEWARE ────────────────────────────────────────────
 function requireAuth(req, res, next) {
   const header = req.headers.authorization;
   if (!header?.startsWith("Bearer ")) return res.status(401).json({ message: "Unauthorized" });
-  try { req.user = jwt.verify(header.split(" ")[1], JWT_SECRET); next(); }
-  catch { res.status(401).json({ message: "Invalid token" }); }
+  try {
+    req.user = jwt.verify(header.split(" ")[1], JWT_SECRET);
+    next();
+  } catch {
+    res.status(401).json({ message: "Invalid token" });
+  }
 }
 
-// ── INIT ───────────────────────────────────────────────────────
+function verifySecret(candidate, actual) {
+  const candidateBuffer = Buffer.from(String(candidate || ""), "utf8");
+  const actualBuffer = Buffer.from(String(actual || ""), "utf8");
+  if (candidateBuffer.length !== actualBuffer.length) return false;
+  return crypto.timingSafeEqual(candidateBuffer, actualBuffer);
+}
+
+function requireAdminAuth(req, res, next) {
+  const header = req.headers.authorization;
+  if (!header?.startsWith("Bearer ")) return res.status(401).json({ message: "Admin authorization required." });
+  try {
+    const token = header.split(" ")[1];
+    const payload = jwt.verify(token, ADMIN_SESSION_SECRET);
+    if (payload.role !== "admin") return res.status(403).json({ message: "Admin access denied." });
+    req.admin = payload;
+    next();
+  } catch {
+    res.status(401).json({ message: "Invalid admin session." });
+  }
+}
+
 ensureUsersTable().catch(console.error);
 
-// ── HEALTH ────────────────────────────────────────────────────
 app.get("/api/health", (req, res) => res.json({ status: "ok", ts: new Date().toISOString() }));
 
-// ── AUTH: CREATE CLIENT ───────────────────────────────────────
 app.post("/api/auth/create-client", async (req, res) => {
   const { email, password, store_id } = req.body;
-  if (!email || !password || !store_id)
+  if (!email || !password || !store_id) {
     return res.status(400).json({ message: "email, password and store_id are required" });
+  }
+
   try {
     const created = await createClientUser(email, password, store_id);
     if (!created) return res.status(400).json({ message: "Email already registered" });
     res.status(201).json({ success: true, message: "Client account created successfully" });
   } catch (err) {
     console.error("Create client error:", err);
-    res.status(500).json({ message: "Failed to create account: " + err.message });
+    res.status(500).json({ message: `Failed to create account: ${err.message}` });
   }
 });
 
-// ── AUTH: LOGIN ───────────────────────────────────────────────
 app.post("/api/auth/login", async (req, res) => {
   const { email, password } = req.body;
   if (!email || !password) return res.status(400).json({ message: "Email and password required" });
+
   try {
     const database = await getAuthDb();
     const stmt = database.prepare("SELECT * FROM client_users WHERE email = ? AND is_active = 1");
@@ -135,21 +158,42 @@ app.post("/api/auth/login", async (req, res) => {
     let user = null;
     if (stmt.step()) user = stmt.getAsObject();
     stmt.free();
+
     if (!user) return res.status(401).json({ message: "Invalid email or password" });
+
     const valid = await bcrypt.compare(password, user.password_hash);
     if (!valid) return res.status(401).json({ message: "Invalid email or password" });
+
     const token = jwt.sign(
       { id: user.id, email: user.email, store_id: user.store_id },
-      JWT_SECRET, { expiresIn: "30d" }
+      JWT_SECRET,
+      { expiresIn: "30d" }
     );
+
     res.json({ token, user: { email: user.email, store_id: user.store_id } });
   } catch (err) {
     console.error("Login error:", err);
-    res.status(500).json({ message: "Login failed: " + err.message });
+    res.status(500).json({ message: `Login failed: ${err.message}` });
   }
 });
 
-// ── CLIENT DASHBOARD ─────────────────────────────────────────
+app.post("/api/admin/login", [
+  body("password").isString().trim().notEmpty(),
+], validate, async (req, res) => {
+  try {
+    const { password } = req.body;
+    if (!verifySecret(password, ADMIN_PASSWORD)) {
+      return res.status(401).json({ message: "Incorrect admin password." });
+    }
+
+    const token = jwt.sign({ role: "admin" }, ADMIN_SESSION_SECRET, { expiresIn: "12h" });
+    res.json({ success: true, token });
+  } catch (err) {
+    console.error("Admin login error:", err);
+    res.status(500).json({ message: "Admin login failed." });
+  }
+});
+
 app.get("/api/client/dashboard", requireAuth, async (req, res) => {
   try {
     const store = await db.getStoreDetails(req.user.store_id).catch(() => null);
@@ -160,8 +204,7 @@ app.get("/api/client/dashboard", requireAuth, async (req, res) => {
   }
 });
 
-// ── ADMIN ROUTES ──────────────────────────────────────────────
-app.get("/api/admin/dashboard", async (req, res) => {
+app.get("/api/admin/dashboard", requireAdminAuth, async (req, res) => {
   try {
     const filters = {
       search: req.query.search || "",
@@ -179,7 +222,7 @@ app.get("/api/admin/dashboard", async (req, res) => {
   }
 });
 
-app.get("/api/admin/stores/:id", async (req, res) => {
+app.get("/api/admin/stores/:id", requireAdminAuth, async (req, res) => {
   try {
     const store = await db.getStoreDetails(req.params.id);
     if (!store) return res.status(404).json({ message: "Store not found." });
@@ -205,7 +248,7 @@ app.patch("/api/admin/stores/:id", [
   body("accentColor").optional().matches(/^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/),
   body("welcomeMessage").optional().isString().isLength({ max: 300 }),
   body("internalNotes").optional().isString().isLength({ max: 6000 }),
-], validate, async (req, res) => {
+], validate, requireAdminAuth, async (req, res) => {
   try {
     const store = await db.updateStore(req.params.id, req.body);
     if (!store) return res.status(404).json({ message: "Store not found." });
@@ -220,7 +263,7 @@ app.patch("/api/admin/stores/:id", [
 app.post("/api/admin/stores/:id/logs", [
   body("event").notEmpty().isString(),
   body("payload").optional().isObject(),
-], validate, async (req, res) => {
+], validate, requireAdminAuth, async (req, res) => {
   try {
     const store = await db.getSubmissionById(req.params.id);
     if (!store) return res.status(404).json({ message: "Store not found." });
@@ -233,7 +276,6 @@ app.post("/api/admin/stores/:id/logs", [
   }
 });
 
-// ── VALIDATE CREDENTIALS ──────────────────────────────────────
 app.post("/api/validate-credentials", [
   body("platform").isIn(["shopify", "woocommerce"]),
   body("storeUrl").isURL({ require_protocol: true }),
@@ -249,7 +291,6 @@ app.post("/api/validate-credentials", [
   }
 });
 
-// ── SUBMIT ────────────────────────────────────────────────────
 app.post("/api/submit", [
   body("storeUrl").isURL({ require_protocol: true }).trim().escape(),
   body("platform").isIn(["shopify", "woocommerce"]),
@@ -302,11 +343,9 @@ app.post("/api/submit", [
       platform,
     });
 
-    // ── AUTO-CREATE CLIENT ACCOUNT ────────────────────────
     const autoPassword = storeName.replace(/\s+/g, "").slice(0, 8) + Math.floor(1000 + Math.random() * 9000);
     const created = await createClientUser(contactEmail, autoPassword, submission.storeIdentifier);
 
-    // ── SEND EMAILS ───────────────────────────────────────
     Promise.all([
       sendAdminEmail({ submission: { ...req.body, id: submission.id } }),
       sendConfirmationEmail({
@@ -317,7 +356,7 @@ app.post("/api/submit", [
         storeId: submission.storeIdentifier,
         loginUrl: "https://agentcommerce-frontend-git-master-code-with-khuzaimas-projects.vercel.app/login",
       }),
-    ]).catch(err => console.error("Email error:", err));
+    ]).catch((err) => console.error("Email error:", err));
 
     res.status(201).json({
       success: true,
