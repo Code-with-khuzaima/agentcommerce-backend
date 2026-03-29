@@ -12,7 +12,7 @@ const { body, validationResult } = require("express-validator");
 
 const db = require("./db");
 const { encrypt } = require("./crypto");
-const { sendAdminEmail, sendConfirmationEmail } = require("./email");
+const { sendAdminEmail, sendConfirmationEmail, sendPasswordResetEmail } = require("./email");
 const { validateShopify, validateWooCommerce } = require("./platformValidator");
 
 const app = express();
@@ -114,6 +114,13 @@ async function createClientUser(email, password, store_id) {
     [email.toLowerCase(), hash, store_id]);
   saveAuthDb();
   return true;
+}
+
+async function updateClientPassword(email, password) {
+  const database = await getAuthDb();
+  const hash = await bcrypt.hash(password, 10);
+  database.run("UPDATE client_users SET password_hash = ? WHERE email = ?", [hash, String(email || "").toLowerCase().trim()]);
+  saveAuthDb();
 }
 
 function requireAuth(req, res, next) {
@@ -316,8 +323,12 @@ app.post("/api/submit", [
   body("storeUrl").isURL({ require_protocol: true }).trim().escape(),
   body("platform").isIn(["shopify", "woocommerce"]),
   body("plan").optional().isIn(["starter", "pro", "enterprise"]),
+  body("billingCycle").optional().isIn(["monthly", "yearly"]),
   body("storeName").notEmpty().trim().escape().isLength({ max: 200 }),
-  body("contactEmail").isEmail().normalizeEmail(),
+  body("storeContactEmail").isEmail().normalizeEmail(),
+  body("loginEmail").isEmail().normalizeEmail(),
+  body("phoneNumber").isString().trim().isLength({ min: 3, max: 100 }),
+  body("storeAddress").optional().isString().trim().isLength({ max: 500 }),
   body("accountPassword").isString().isLength({ min: 8, max: 200 }),
   body("categories").optional().isArray(),
   body("deliveryMethods").optional().isArray(),
@@ -329,14 +340,14 @@ app.post("/api/submit", [
   body("fullDetails").optional().isString().isLength({ max: 12000 }),
 ], validate, async (req, res) => {
   const {
-    plan, storeUrl, platform, storeName, contactEmail, accountPassword,
+    plan, billingCycle, storeUrl, platform, storeName, storeContactEmail, loginEmail, phoneNumber, hasPhysicalStore, storeAddress, accountPassword,
     apiKey, accessToken, consumerKey, consumerSecret,
     categories, deliveryMethods, returnPolicy, faqs, notes,
     qnaPairs, storeAnswers, fullDetails,
   } = req.body;
 
   try {
-    const existingClient = await findClientUserByEmail(contactEmail);
+    const existingClient = await findClientUserByEmail(loginEmail);
     if (existingClient) {
       return res.status(409).json({ message: "This email is already registered. Please log in instead." });
     }
@@ -354,7 +365,12 @@ app.post("/api/submit", [
       storeUrl,
       platform,
       storeName,
-      contactEmail,
+      contactEmail: storeContactEmail,
+      loginEmail,
+      phoneNumber,
+      hasPhysicalStore: Boolean(hasPhysicalStore),
+      storeAddress: storeAddress || "",
+      billingCycle: billingCycle || "monthly",
       plan: plan || "starter",
       credentials: JSON.stringify(encryptedCredentials),
       categories: JSON.stringify(categories || []),
@@ -373,7 +389,7 @@ app.post("/api/submit", [
       platform,
     });
 
-    const created = await createClientUser(contactEmail, accountPassword, submission.storeIdentifier);
+    const created = await createClientUser(loginEmail, accountPassword, submission.storeIdentifier);
     if (!created) {
       return res.status(409).json({ message: "This email is already registered. Please log in instead." });
     }
@@ -381,9 +397,9 @@ app.post("/api/submit", [
     Promise.all([
       sendAdminEmail({ submission: { ...req.body, id: submission.id } }),
       sendConfirmationEmail({
-        to: contactEmail,
+        to: loginEmail,
         storeName,
-        loginEmail: contactEmail,
+        loginEmail,
         loginPassword: "(the password the client chose during signup)",
         storeId: submission.storeIdentifier,
         loginUrl: "https://agentcommerce-frontend-git-master-code-with-khuzaimas-projects.vercel.app/login",
@@ -397,11 +413,31 @@ app.post("/api/submit", [
       planPrice: submission.planPrice,
       msgLimit: submission.msgLimit,
       message: "Submission received. You can now log in with your email and password.",
-      loginEmail: contactEmail,
+      loginEmail,
     });
   } catch (err) {
     console.error("Submit error:", err);
     res.status(500).json({ message: "Failed to process submission. Please try again." });
+  }
+});
+
+app.post("/api/auth/forgot-password", [
+  body("email").isEmail().normalizeEmail(),
+], validate, async (req, res) => {
+  try {
+    const email = String(req.body.email || "").toLowerCase().trim();
+    const user = await findClientUserByEmail(email);
+
+    if (user) {
+      const temporaryPassword = Math.random().toString(36).slice(-10) + "A1";
+      await updateClientPassword(email, temporaryPassword);
+      await sendPasswordResetEmail({ to: email, temporaryPassword });
+    }
+
+    res.json({ success: true, message: "If the email exists, a temporary password has been sent." });
+  } catch (err) {
+    console.error("Forgot password error:", err);
+    res.status(500).json({ message: "Failed to process forgot password request." });
   }
 });
 app.use((err, req, res, next) => {

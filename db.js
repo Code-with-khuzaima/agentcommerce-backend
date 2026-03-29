@@ -7,8 +7,8 @@ const DB_PATH = path.join(__dirname, "agentcommerce.db");
 
 const PLAN_CONFIG = {
   starter: { price: 19, msgLimit: 5000 },
-  pro: { price: 49, msgLimit: 13000 },
-  enterprise: { price: 79, msgLimit: 999999 },
+  pro: { price: 29, msgLimit: 13000 },
+  enterprise: { price: 49, msgLimit: 999999 },
 };
 
 function parseJson(value, fallback) {
@@ -104,6 +104,11 @@ function applyStoreMigrations(database) {
     ["qna_count", "INTEGER DEFAULT 0"],
     ["full_details", "TEXT DEFAULT ''"],
     ["store_answers", "TEXT DEFAULT '{}'"],
+    ["billing_cycle", "TEXT DEFAULT 'monthly'"],
+    ["login_email", "TEXT DEFAULT ''"],
+    ["phone_number", "TEXT DEFAULT ''"],
+    ["has_physical_store", "INTEGER DEFAULT 0"],
+    ["store_address", "TEXT DEFAULT ''"],
     ["updated_at", "DATETIME DEFAULT CURRENT_TIMESTAMP"],
   ];
 
@@ -132,6 +137,11 @@ function hydrateStore(row) {
     platform: row.platform,
     storeName: row.store_name,
     contactEmail: row.contact_email,
+    loginEmail: row.login_email || "",
+    phoneNumber: row.phone_number || "",
+    hasPhysicalStore: Number(row.has_physical_store || 0) === 1,
+    storeAddress: row.store_address || "",
+    billingCycle: row.billing_cycle || "monthly",
     categories,
     deliveryMethods,
     returnPolicy: row.return_policy || "",
@@ -201,7 +211,7 @@ async function initDb() {
   run(database, "UPDATE stores SET store_identifier = COALESCE(store_identifier, '') WHERE store_identifier IS NULL");
   run(database, "UPDATE stores SET updated_at = COALESCE(updated_at, created_at)");
   run(database, "UPDATE stores SET plan = COALESCE(plan, 'starter')");
-  run(database, "UPDATE stores SET plan_price = CASE plan WHEN 'pro' THEN 49 WHEN 'enterprise' THEN 79 ELSE 19 END WHERE plan_price IS NULL OR plan_price = 0");
+  run(database, "UPDATE stores SET plan_price = CASE plan WHEN 'pro' THEN 29 WHEN 'enterprise' THEN 49 ELSE 19 END");
   run(database, "UPDATE stores SET payment_amount = CASE WHEN payment_amount IS NULL OR payment_amount = 0 THEN plan_price ELSE payment_amount END");
   run(database, "UPDATE stores SET msg_limit = CASE plan WHEN 'pro' THEN 13000 WHEN 'enterprise' THEN 999999 ELSE 5000 END WHERE msg_limit IS NULL OR msg_limit = 0");
 
@@ -219,6 +229,11 @@ async function createSubmission({
   platform,
   storeName,
   contactEmail,
+  loginEmail = "",
+  phoneNumber = "",
+  hasPhysicalStore = false,
+  storeAddress = "",
+  billingCycle = "monthly",
   credentials,
   categories,
   deliveryMethods,
@@ -239,11 +254,12 @@ async function createSubmission({
       (store_url, platform, store_name, contact_email, credentials,
        categories, delivery_methods, return_policy, faqs, notes,
        status, plan, plan_price, msg_limit, msg_count,
-       payment_status, payment_amount, currency,
-       setup_status, workflow_status, widget_status, priority,
-       agent_name, accent_color, welcome_message, webhook_url,
-       internal_notes, qna_count, full_details, store_answers, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)`,
+      payment_status, payment_amount, currency,
+      setup_status, workflow_status, widget_status, priority,
+      agent_name, accent_color, welcome_message, webhook_url,
+      internal_notes, qna_count, full_details, store_answers,
+      billing_cycle, login_email, phone_number, has_physical_store, store_address, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)`,
     [
       storeUrl,
       platform,
@@ -275,6 +291,11 @@ async function createSubmission({
       qnaCount,
       fullDetails,
       storeAnswers,
+      billingCycle,
+      loginEmail,
+      phoneNumber,
+      hasPhysicalStore ? 1 : 0,
+      storeAddress,
     ]
   );
 

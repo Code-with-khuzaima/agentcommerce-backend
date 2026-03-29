@@ -180,4 +180,32 @@ async function sendConfirmationEmail({ to, storeName }) {
   });
 }
 
-module.exports = { sendAdminEmail, sendConfirmationEmail };
+async function sendPasswordResetEmail({ to, temporaryPassword }) {
+  const html = `
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"/></head>
+<body style="font-family:sans-serif;background:#f8fafc;margin:0;padding:20px;">
+<div style="max-width:560px;margin:0 auto;">
+  <div style="background:linear-gradient(135deg,#7c3aed,#a855f7);border-radius:12px 12px 0 0;padding:32px;">
+    <h1 style="margin:0;color:#fff;font-size:24px;">Password Reset</h1>
+  </div>
+  <div style="background:#fff;border:1px solid #e2e8f0;border-top:none;border-radius:0 0 12px 12px;padding:32px;">
+    <p style="color:#475569;font-size:15px;line-height:1.7;">A password reset was requested for your AgentCommerce customer dashboard.</p>
+    <p style="color:#475569;font-size:15px;line-height:1.7;">Your temporary password is:</p>
+    <div style="background:#f5f3ff;border-left:4px solid #7c3aed;border-radius:4px;padding:16px;margin:24px 0;font-size:18px;font-weight:700;color:#4c1d95;">${temporaryPassword}</div>
+    <p style="color:#475569;font-size:14px;line-height:1.7;">Log in with this password and change it from the dashboard later.</p>
+  </div>
+</div>
+</body>
+</html>`;
+
+  await transporter.sendMail({
+    from: `"AgentCommerce" <${process.env.FROM_EMAIL || "noreply@agentcommerce.ai"}>`,
+    to,
+    subject: "AgentCommerce dashboard password reset",
+    html,
+  });
+}
+
+module.exports = { sendAdminEmail, sendConfirmationEmail, sendPasswordResetEmail };
