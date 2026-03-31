@@ -22,6 +22,8 @@ const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || "agentcommerce_admin_2024";
 const ADMIN_SESSION_SECRET = process.env.ADMIN_SESSION_SECRET || JWT_SECRET;
 const DB_PATH = path.join(__dirname, "agentcommerce.db");
 
+app.set("trust proxy", 1);
+
 const allowedOrigins = (process.env.CORS_ORIGIN || "")
   .split(",").map((origin) => origin.trim()).filter(Boolean);
 

@@ -1,12 +1,15 @@
-// ============================================================
-// email.js — Transactional emails via Nodemailer
-// Supports: SMTP, SendGrid, Postmark, Amazon SES
-// ============================================================
-
 const nodemailer = require("nodemailer");
 
+function getEmailProvider() {
+  return (process.env.EMAIL_PROVIDER || "smtp").toLowerCase().trim();
+}
+
 function assertEmailConfig() {
-  const provider = process.env.EMAIL_PROVIDER || "smtp";
+  const provider = getEmailProvider();
+
+  if (provider === "brevo" && !process.env.BREVO_API_KEY) {
+    throw new Error("EMAIL_NOT_CONFIGURED");
+  }
 
   if (provider === "sendgrid" && !process.env.SENDGRID_API_KEY) {
     throw new Error("EMAIL_NOT_CONFIGURED");
@@ -23,12 +26,14 @@ function assertEmailConfig() {
   if (provider === "smtp" && (!process.env.SMTP_HOST || !process.env.SMTP_USER || !process.env.SMTP_PASS)) {
     throw new Error("EMAIL_NOT_CONFIGURED");
   }
+
+  if (!process.env.FROM_EMAIL) {
+    throw new Error("EMAIL_NOT_CONFIGURED");
+  }
 }
 
-// ── Transporter factory ───────────────────────────────────────
 function createTransporter() {
-  assertEmailConfig();
-  const provider = process.env.EMAIL_PROVIDER || "smtp";
+  const provider = getEmailProvider();
 
   if (provider === "sendgrid") {
     return nodemailer.createTransport({
@@ -53,10 +58,9 @@ function createTransporter() {
     return nodemailer.createTransport({ SES: { ses: sesClient, aws } });
   }
 
-  // Default: generic SMTP
   return nodemailer.createTransport({
-    host:   process.env.SMTP_HOST || "smtp.mailtrap.io",
-    port:   parseInt(process.env.SMTP_PORT || "587"),
+    host: process.env.SMTP_HOST,
+    port: parseInt(process.env.SMTP_PORT || "587", 10),
     secure: process.env.SMTP_SECURE === "true",
     auth: {
       user: process.env.SMTP_USER,
@@ -74,21 +78,89 @@ function getTransporter() {
   return transporter;
 }
 
+function normalizeRecipients(to) {
+  return Array.isArray(to) ? to.filter(Boolean) : [to].filter(Boolean);
+}
+
+function stripHtml(html) {
+  return String(html || "")
+    .replace(/<style[\s\S]*?<\/style>/gi, "")
+    .replace(/<script[\s\S]*?<\/script>/gi, "")
+    .replace(/<br\s*\/?>/gi, "\n")
+    .replace(/<\/p>/gi, "\n\n")
+    .replace(/<[^>]+>/g, "")
+    .replace(/&nbsp;/g, " ")
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .trim();
+}
+
+async function sendViaBrevoApi(mailOptions, label) {
+  const recipients = normalizeRecipients(mailOptions.to).map((email) => ({ email }));
+  const payload = {
+    sender: {
+      email: process.env.FROM_EMAIL,
+      name: "AgentCommerce",
+    },
+    to: recipients,
+    subject: mailOptions.subject,
+    htmlContent: mailOptions.html,
+    textContent: stripHtml(mailOptions.html),
+  };
+
+  const res = await fetch("https://api.brevo.com/v3/smtp/email", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "api-key": process.env.BREVO_API_KEY,
+    },
+    body: JSON.stringify(payload),
+  });
+
+  const raw = await res.text();
+  let data = {};
+  try {
+    data = raw ? JSON.parse(raw) : {};
+  } catch {
+    data = { raw };
+  }
+
+  if (!res.ok) {
+    console.error(`[email:${label}] brevo-api-failed status=${res.status} body=${raw}`);
+    throw new Error(`BREVO_API_ERROR_${res.status}`);
+  }
+
+  console.log(`[email:${label}] provider=brevo accepted=${JSON.stringify(recipients.map((r) => r.email))} response=${raw} messageId=${data.messageId || ""}`);
+  return data;
+}
+
 async function sendMailWithLogging(mailOptions, label) {
-  const info = await getTransporter().sendMail(mailOptions);
-  console.log(`[email:${label}] accepted=${JSON.stringify(info.accepted || [])} rejected=${JSON.stringify(info.rejected || [])} response=${info.response || ""} messageId=${info.messageId || ""}`);
+  assertEmailConfig();
+
+  if (getEmailProvider() === "brevo") {
+    return sendViaBrevoApi(mailOptions, label);
+  }
+
+  const info = await getTransporter().sendMail({
+    from: mailOptions.from,
+    to: mailOptions.to,
+    subject: mailOptions.subject,
+    html: mailOptions.html,
+  });
+
+  console.log(`[email:${label}] provider=${getEmailProvider()} accepted=${JSON.stringify(info.accepted || [])} rejected=${JSON.stringify(info.rejected || [])} response=${info.response || ""} messageId=${info.messageId || ""}`);
   return info;
 }
 
-// ── Admin notification ────────────────────────────────────────
 async function sendAdminEmail({ submission }) {
   const {
     id, storeUrl, platform, storeName, contactEmail,
     categories, deliveryMethods, returnPolicy, faqs, notes,
   } = submission;
 
-  const cats = Array.isArray(categories) ? categories.join(", ") : categories || "—";
-  const dels = Array.isArray(deliveryMethods) ? deliveryMethods.join(", ") : deliveryMethods || "—";
+  const cats = Array.isArray(categories) ? categories.join(", ") : categories || "-";
+  const dels = Array.isArray(deliveryMethods) ? deliveryMethods.join(", ") : deliveryMethods || "-";
 
   const html = `
 <!DOCTYPE html>
@@ -96,23 +168,20 @@ async function sendAdminEmail({ submission }) {
 <head><meta charset="utf-8"/></head>
 <body style="font-family:sans-serif;background:#0f0f14;color:#e2e8f0;margin:0;padding:20px;">
 <div style="max-width:600px;margin:0 auto;">
-
   <div style="background:linear-gradient(135deg,#7c3aed,#a855f7);border-radius:12px 12px 0 0;padding:28px 32px;">
-    <h1 style="margin:0;color:#fff;font-size:22px;">🤖 New Store Integration Request</h1>
-    <p style="margin:8px 0 0;color:rgba(255,255,255,0.7);font-size:14px;">Submission #${id} — Action required within 1–2 business days</p>
+    <h1 style="margin:0;color:#fff;font-size:22px;">New Store Integration Request</h1>
+    <p style="margin:8px 0 0;color:rgba(255,255,255,0.7);font-size:14px;">Submission #${id} - Action required within 1-2 business days</p>
   </div>
-
   <div style="background:#1e1e2e;border:1px solid rgba(255,255,255,0.08);border-top:none;border-radius:0 0 12px 12px;padding:32px;">
-
     <h2 style="color:#a78bfa;font-size:14px;text-transform:uppercase;letter-spacing:0.1em;margin:0 0 16px;">Store Details</h2>
     <table style="width:100%;border-collapse:collapse;margin-bottom:24px;">
       ${[
-        ["Store Name",   storeName],
-        ["Store URL",    `<a href="${storeUrl}" style="color:#a78bfa;">${storeUrl}</a>`],
-        ["Platform",     platform?.toUpperCase()],
-        ["Contact",      `<a href="mailto:${contactEmail}" style="color:#a78bfa;">${contactEmail}</a>`],
-        ["Categories",   cats],
-        ["Delivery",     dels],
+        ["Store Name", storeName],
+        ["Store URL", `<a href="${storeUrl}" style="color:#a78bfa;">${storeUrl}</a>`],
+        ["Platform", String(platform || "").toUpperCase()],
+        ["Contact", `<a href="mailto:${contactEmail}" style="color:#a78bfa;">${contactEmail}</a>`],
+        ["Categories", cats],
+        ["Delivery", dels],
       ].map(([k, v]) => `
         <tr>
           <td style="padding:10px 12px;background:#252535;border-radius:4px;color:#94a3b8;font-size:13px;font-weight:600;width:140px;">${k}</td>
@@ -121,40 +190,22 @@ async function sendAdminEmail({ submission }) {
         <tr><td colspan="2" style="height:4px;"></td></tr>
       `).join("")}
     </table>
-
-    ${returnPolicy ? `
-    <h2 style="color:#a78bfa;font-size:14px;text-transform:uppercase;letter-spacing:0.1em;margin:0 0 8px;">Return Policy</h2>
-    <div style="background:#252535;border-radius:8px;padding:16px;font-size:13px;color:#cbd5e1;line-height:1.6;margin-bottom:20px;">${returnPolicy.replace(/\n/g, "<br>")}</div>
-    ` : ""}
-
-    ${faqs ? `
-    <h2 style="color:#a78bfa;font-size:14px;text-transform:uppercase;letter-spacing:0.1em;margin:0 0 8px;">FAQs</h2>
-    <div style="background:#252535;border-radius:8px;padding:16px;font-size:13px;color:#cbd5e1;line-height:1.6;margin-bottom:20px;">${faqs.replace(/\n/g, "<br>")}</div>
-    ` : ""}
-
-    ${notes ? `
-    <h2 style="color:#a78bfa;font-size:14px;text-transform:uppercase;letter-spacing:0.1em;margin:0 0 8px;">Special Notes</h2>
-    <div style="background:#252535;border-radius:8px;padding:16px;font-size:13px;color:#cbd5e1;line-height:1.6;margin-bottom:20px;">${notes.replace(/\n/g, "<br>")}</div>
-    ` : ""}
-
-    <div style="background:#1a1a2e;border:1px solid #7c3aed33;border-radius:8px;padding:16px;margin-top:8px;">
-      <p style="margin:0;font-size:12px;color:#64748b;">⚠️ API credentials are stored encrypted. Access them via the admin dashboard. Do not share submission emails publicly.</p>
-    </div>
-
+    ${returnPolicy ? `<h2 style="color:#a78bfa;font-size:14px;text-transform:uppercase;letter-spacing:0.1em;margin:0 0 8px;">Return Policy</h2><div style="background:#252535;border-radius:8px;padding:16px;font-size:13px;color:#cbd5e1;line-height:1.6;margin-bottom:20px;">${returnPolicy.replace(/\n/g, "<br>")}</div>` : ""}
+    ${faqs ? `<h2 style="color:#a78bfa;font-size:14px;text-transform:uppercase;letter-spacing:0.1em;margin:0 0 8px;">FAQs</h2><div style="background:#252535;border-radius:8px;padding:16px;font-size:13px;color:#cbd5e1;line-height:1.6;margin-bottom:20px;">${faqs.replace(/\n/g, "<br>")}</div>` : ""}
+    ${notes ? `<h2 style="color:#a78bfa;font-size:14px;text-transform:uppercase;letter-spacing:0.1em;margin:0 0 8px;">Special Notes</h2><div style="background:#252535;border-radius:8px;padding:16px;font-size:13px;color:#cbd5e1;line-height:1.6;margin-bottom:20px;">${notes.replace(/\n/g, "<br>")}</div>` : ""}
   </div>
 </div>
 </body>
 </html>`;
 
   await sendMailWithLogging({
-    from:    `"AgentCommerce" <${process.env.FROM_EMAIL || "noreply@agentcommerce.ai"}>`,
-    to:      process.env.ADMIN_EMAIL || "admin@agentcommerce.ai",
-    subject: `[New Submission #${id}] ${storeName} — ${platform} Integration Request`,
+    from: `"AgentCommerce" <${process.env.FROM_EMAIL}>`,
+    to: process.env.ADMIN_EMAIL || process.env.FROM_EMAIL,
+    subject: `[New Submission #${id}] ${storeName} - ${platform} Integration Request`,
     html,
   }, "admin-notification");
 }
 
-// ── Customer confirmation ─────────────────────────────────────
 async function sendConfirmationEmail({ to, storeName }) {
   const html = `
 <!DOCTYPE html>
@@ -162,54 +213,21 @@ async function sendConfirmationEmail({ to, storeName }) {
 <head><meta charset="utf-8"/></head>
 <body style="font-family:sans-serif;background:#f8fafc;margin:0;padding:20px;">
 <div style="max-width:560px;margin:0 auto;">
-
   <div style="background:linear-gradient(135deg,#7c3aed,#a855f7);border-radius:12px 12px 0 0;padding:32px;">
-    <h1 style="margin:0;color:#fff;font-size:24px;">Your AI Agent is On Its Way! 🚀</h1>
+    <h1 style="margin:0;color:#fff;font-size:24px;">Your AI Agent is On Its Way</h1>
   </div>
-
   <div style="background:#fff;border:1px solid #e2e8f0;border-top:none;border-radius:0 0 12px 12px;padding:32px;">
-    <p style="color:#475569;font-size:15px;line-height:1.7;">Hi there,</p>
-    <p style="color:#475569;font-size:15px;line-height:1.7;">
-      Thanks for submitting <strong>${storeName}</strong> to AgentCommerce. We've received your store details and our team is already on it!
-    </p>
-
-    <div style="background:#f5f3ff;border-left:4px solid #7c3aed;border-radius:4px;padding:16px;margin:24px 0;">
-      <p style="margin:0;color:#4c1d95;font-size:14px;font-weight:600;">⏱ Expected timeline: 1–2 business days</p>
-    </div>
-
-    <h3 style="color:#1e1b4b;font-size:15px;">What happens next:</h3>
-    <div style="space-y:8px;">
-      ${[
-        ["🔍", "We review your credentials and configure your AI agent"],
-        ["🧠", "We train it on your products, FAQs, and store policies"],
-        ["⚡", "We install the widget snippet in your store"],
-        ["✅", "You receive confirmation and your agent goes live!"],
-      ].map(([emoji, text]) => `
-        <div style="display:flex;align-items:flex-start;gap:12px;padding:10px 0;border-bottom:1px solid #f1f5f9;">
-          <span style="font-size:18px;">${emoji}</span>
-          <p style="margin:0;color:#475569;font-size:14px;line-height:1.6;">${text}</p>
-        </div>
-      `).join("")}
-    </div>
-
-    <p style="color:#475569;font-size:14px;line-height:1.7;margin-top:24px;">
-      If you have any questions in the meantime, reply to this email or reach us at 
-      <a href="mailto:support@agentcommerce.ai" style="color:#7c3aed;">support@agentcommerce.ai</a>.
-    </p>
-
-    <p style="color:#94a3b8;font-size:13px;margin-top:32px;padding-top:20px;border-top:1px solid #f1f5f9;">
-      — The AgentCommerce Team<br/>
-      <a href="https://agentcommerce.ai" style="color:#7c3aed;">agentcommerce.ai</a>
-    </p>
+    <p style="color:#475569;font-size:15px;line-height:1.7;">Thanks for submitting <strong>${storeName}</strong> to AgentCommerce.</p>
+    <p style="color:#475569;font-size:15px;line-height:1.7;">Expected timeline: 1-2 business days.</p>
   </div>
 </div>
 </body>
 </html>`;
 
   await sendMailWithLogging({
-    from:    `"AgentCommerce" <${process.env.FROM_EMAIL || "noreply@agentcommerce.ai"}>`,
+    from: `"AgentCommerce" <${process.env.FROM_EMAIL}>`,
     to,
-    subject: `✅ We got your request — ${storeName} AI agent incoming!`,
+    subject: `We got your request - ${storeName} AI agent incoming`,
     html,
   }, "customer-confirmation");
 }
@@ -237,7 +255,7 @@ async function sendPasswordResetEmail({ to, temporaryPassword, loginUrl }) {
 </html>`;
 
   await sendMailWithLogging({
-    from: `"AgentCommerce" <${process.env.FROM_EMAIL || "noreply@agentcommerce.ai"}>`,
+    from: `"AgentCommerce" <${process.env.FROM_EMAIL}>`,
     to,
     subject: "AgentComerce forgot password email",
     html,
