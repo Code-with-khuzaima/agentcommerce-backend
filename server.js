@@ -445,6 +445,7 @@ app.post("/api/auth/forgot-password", [
   try {
     const email = String(req.body.email || "").toLowerCase().trim();
     const user = await findClientUserByEmail(email);
+    console.log(`[forgot-password] request for ${email} userFound=${Boolean(user)}`);
 
     if (user) {
       const temporaryPassword = Math.random().toString(36).slice(-10) + "A1";
@@ -457,10 +458,12 @@ app.post("/api/auth/forgot-password", [
           temporaryPassword,
           loginUrl: "https://agentcommerce-frontend-git-master-code-with-khuzaimas-projects.vercel.app/login",
         });
+        console.log(`[forgot-password] reset email sent for ${email}`);
       } catch (mailErr) {
         if (previousHash) {
           await updateClientPasswordHash(email, previousHash);
         }
+        console.error(`[forgot-password] mail failed for ${email}:`, mailErr);
         throw mailErr;
       }
     }

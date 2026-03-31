@@ -74,6 +74,12 @@ function getTransporter() {
   return transporter;
 }
 
+async function sendMailWithLogging(mailOptions, label) {
+  const info = await getTransporter().sendMail(mailOptions);
+  console.log(`[email:${label}] accepted=${JSON.stringify(info.accepted || [])} rejected=${JSON.stringify(info.rejected || [])} response=${info.response || ""} messageId=${info.messageId || ""}`);
+  return info;
+}
+
 // ── Admin notification ────────────────────────────────────────
 async function sendAdminEmail({ submission }) {
   const {
@@ -140,12 +146,12 @@ async function sendAdminEmail({ submission }) {
 </body>
 </html>`;
 
-  await getTransporter().sendMail({
+  await sendMailWithLogging({
     from:    `"AgentCommerce" <${process.env.FROM_EMAIL || "noreply@agentcommerce.ai"}>`,
     to:      process.env.ADMIN_EMAIL || "admin@agentcommerce.ai",
     subject: `[New Submission #${id}] ${storeName} — ${platform} Integration Request`,
     html,
-  });
+  }, "admin-notification");
 }
 
 // ── Customer confirmation ─────────────────────────────────────
@@ -200,12 +206,12 @@ async function sendConfirmationEmail({ to, storeName }) {
 </body>
 </html>`;
 
-  await getTransporter().sendMail({
+  await sendMailWithLogging({
     from:    `"AgentCommerce" <${process.env.FROM_EMAIL || "noreply@agentcommerce.ai"}>`,
     to,
     subject: `✅ We got your request — ${storeName} AI agent incoming!`,
     html,
-  });
+  }, "customer-confirmation");
 }
 
 async function sendPasswordResetEmail({ to, temporaryPassword, loginUrl }) {
@@ -230,12 +236,12 @@ async function sendPasswordResetEmail({ to, temporaryPassword, loginUrl }) {
 </body>
 </html>`;
 
-  await getTransporter().sendMail({
+  await sendMailWithLogging({
     from: `"AgentCommerce" <${process.env.FROM_EMAIL || "noreply@agentcommerce.ai"}>`,
     to,
     subject: "AgentComerce forgot password email",
     html,
-  });
+  }, "forgot-password");
 }
 
 module.exports = { sendAdminEmail, sendConfirmationEmail, sendPasswordResetEmail };
