@@ -132,6 +132,13 @@ async function updateClientPassword(email, password) {
   const hash = await bcrypt.hash(password, 10);
   database.run("UPDATE client_users SET password_hash = ? WHERE email = ?", [hash, String(email || "").toLowerCase().trim()]);
   saveAuthDb();
+  return hash;
+}
+
+async function updateClientPasswordHash(email, passwordHash) {
+  const database = await getAuthDb();
+  database.run("UPDATE client_users SET password_hash = ? WHERE email = ?", [passwordHash, String(email || "").toLowerCase().trim()]);
+  saveAuthDb();
 }
 
 function requireAuth(req, res, next) {
@@ -441,14 +448,30 @@ app.post("/api/auth/forgot-password", [
 
     if (user) {
       const temporaryPassword = Math.random().toString(36).slice(-10) + "A1";
-      await updateClientPassword(email, temporaryPassword);
-      await sendPasswordResetEmail({ to: email, temporaryPassword });
+      const previousHash = user.password_hash;
+
+      try {
+        await updateClientPassword(email, temporaryPassword);
+        await sendPasswordResetEmail({
+          to: email,
+          temporaryPassword,
+          loginUrl: "https://agentcommerce-frontend-git-master-code-with-khuzaimas-projects.vercel.app/login",
+        });
+      } catch (mailErr) {
+        if (previousHash) {
+          await updateClientPasswordHash(email, previousHash);
+        }
+        throw mailErr;
+      }
     }
 
     res.json({ success: true, message: "If the email exists, a temporary password has been sent." });
   } catch (err) {
     console.error("Forgot password error:", err);
-    res.status(500).json({ message: "Failed to process forgot password request." });
+    const message = err.message === "EMAIL_NOT_CONFIGURED"
+      ? "Password reset email is not configured on the server yet."
+      : "Failed to process forgot password request.";
+    res.status(500).json({ message });
   }
 });
 app.use((err, req, res, next) => {

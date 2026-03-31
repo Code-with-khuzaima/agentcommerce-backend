@@ -5,8 +5,29 @@
 
 const nodemailer = require("nodemailer");
 
+function assertEmailConfig() {
+  const provider = process.env.EMAIL_PROVIDER || "smtp";
+
+  if (provider === "sendgrid" && !process.env.SENDGRID_API_KEY) {
+    throw new Error("EMAIL_NOT_CONFIGURED");
+  }
+
+  if (provider === "postmark" && !process.env.POSTMARK_TOKEN) {
+    throw new Error("EMAIL_NOT_CONFIGURED");
+  }
+
+  if (provider === "ses" && (!process.env.AWS_ACCESS_KEY_ID || !process.env.AWS_SECRET_ACCESS_KEY)) {
+    throw new Error("EMAIL_NOT_CONFIGURED");
+  }
+
+  if (provider === "smtp" && (!process.env.SMTP_HOST || !process.env.SMTP_USER || !process.env.SMTP_PASS)) {
+    throw new Error("EMAIL_NOT_CONFIGURED");
+  }
+}
+
 // ── Transporter factory ───────────────────────────────────────
 function createTransporter() {
+  assertEmailConfig();
   const provider = process.env.EMAIL_PROVIDER || "smtp";
 
   if (provider === "sendgrid") {
@@ -44,7 +65,14 @@ function createTransporter() {
   });
 }
 
-const transporter = createTransporter();
+let transporter = null;
+
+function getTransporter() {
+  if (!transporter) {
+    transporter = createTransporter();
+  }
+  return transporter;
+}
 
 // ── Admin notification ────────────────────────────────────────
 async function sendAdminEmail({ submission }) {
@@ -112,7 +140,7 @@ async function sendAdminEmail({ submission }) {
 </body>
 </html>`;
 
-  await transporter.sendMail({
+  await getTransporter().sendMail({
     from:    `"AgentCommerce" <${process.env.FROM_EMAIL || "noreply@agentcommerce.ai"}>`,
     to:      process.env.ADMIN_EMAIL || "admin@agentcommerce.ai",
     subject: `[New Submission #${id}] ${storeName} — ${platform} Integration Request`,
@@ -172,7 +200,7 @@ async function sendConfirmationEmail({ to, storeName }) {
 </body>
 </html>`;
 
-  await transporter.sendMail({
+  await getTransporter().sendMail({
     from:    `"AgentCommerce" <${process.env.FROM_EMAIL || "noreply@agentcommerce.ai"}>`,
     to,
     subject: `✅ We got your request — ${storeName} AI agent incoming!`,
@@ -180,7 +208,7 @@ async function sendConfirmationEmail({ to, storeName }) {
   });
 }
 
-async function sendPasswordResetEmail({ to, temporaryPassword }) {
+async function sendPasswordResetEmail({ to, temporaryPassword, loginUrl }) {
   const html = `
 <!DOCTYPE html>
 <html>
@@ -194,13 +222,15 @@ async function sendPasswordResetEmail({ to, temporaryPassword }) {
     <p style="color:#475569;font-size:15px;line-height:1.7;">A password reset was requested for your AgentCommerce customer dashboard.</p>
     <p style="color:#475569;font-size:15px;line-height:1.7;">Your temporary password is:</p>
     <div style="background:#f5f3ff;border-left:4px solid #7c3aed;border-radius:4px;padding:16px;margin:24px 0;font-size:18px;font-weight:700;color:#4c1d95;">${temporaryPassword}</div>
-    <p style="color:#475569;font-size:14px;line-height:1.7;">Log in with this password and change it from the dashboard later.</p>
+    <p style="color:#475569;font-size:14px;line-height:1.7;">Use this temporary password to sign in, then change it from your dashboard.</p>
+    ${loginUrl ? `<p style="margin-top:20px;"><a href="${loginUrl}" style="display:inline-block;background:#7c3aed;color:#fff;text-decoration:none;padding:12px 18px;border-radius:8px;font-size:14px;font-weight:600;">Open Dashboard Login</a></p>` : ""}
+    <p style="color:#64748b;font-size:13px;line-height:1.7;margin-top:20px;">If you did not request this reset, contact support immediately.</p>
   </div>
 </div>
 </body>
 </html>`;
 
-  await transporter.sendMail({
+  await getTransporter().sendMail({
     from: `"AgentCommerce" <${process.env.FROM_EMAIL || "noreply@agentcommerce.ai"}>`,
     to,
     subject: "AgentCommerce dashboard password reset",
