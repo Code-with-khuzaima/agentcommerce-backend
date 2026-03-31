@@ -133,6 +133,18 @@ async function findClientUserByEmail(email) {
   return user;
 }
 
+async function getClientUserSummaryByEmail(email) {
+  const user = await findClientUserByEmail(email);
+  if (!user) return null;
+  return {
+    id: Number(user.id),
+    email: user.email,
+    store_id: user.store_id,
+    is_active: Number(user.is_active || 0) === 1,
+    created_at: user.created_at,
+  };
+}
+
 async function createClientUser(email, password, store_id) {
   const database = await getAuthDb();
   const stmt = database.prepare("SELECT id FROM client_users WHERE email = ?");
@@ -257,6 +269,67 @@ app.post("/api/admin/login", [
   } catch (err) {
     console.error("Admin login error:", err);
     res.status(500).json({ message: "Admin login failed." });
+  }
+});
+
+app.get("/api/admin/client-user", requireAdminAuth, async (req, res) => {
+  try {
+    const email = String(req.query.email || "").toLowerCase().trim();
+    if (!email || !/^\S+@\S+\.\S+$/.test(email)) {
+      return res.status(422).json({ message: "Valid email is required." });
+    }
+
+    const user = await getClientUserSummaryByEmail(email);
+    if (!user) {
+      return res.json({ success: true, exists: false });
+    }
+
+    const store = await db.getStoreDetails(user.store_id).catch(() => null);
+    res.json({
+      success: true,
+      exists: true,
+      user,
+      store: store
+        ? {
+            id: store.id,
+            storeId: store.storeId,
+            storeName: store.storeName,
+            plan: store.plan,
+            status: store.status,
+          }
+        : null,
+    });
+  } catch (err) {
+    console.error("Admin client lookup error:", err);
+    res.status(500).json({ message: "Failed to look up client user." });
+  }
+});
+
+app.post("/api/admin/client-user/reset-password", [
+  body("email").isEmail().normalizeEmail(),
+], validate, requireAdminAuth, async (req, res) => {
+  try {
+    const email = String(req.body.email || "").toLowerCase().trim();
+    const user = await findClientUserByEmail(email);
+    if (!user) {
+      return res.status(404).json({ message: "Client account not found." });
+    }
+
+    const temporaryPassword = `${crypto.randomBytes(4).toString("hex")}A1`;
+    await updateClientPassword(email, temporaryPassword);
+
+    res.json({
+      success: true,
+      message: "Temporary password generated.",
+      temporaryPassword,
+      user: {
+        email: user.email,
+        store_id: user.store_id,
+      },
+    });
+  } catch (err) {
+    console.error("Admin reset password error:", err);
+    res.status(500).json({ message: "Failed to reset client password." });
   }
 });
 
