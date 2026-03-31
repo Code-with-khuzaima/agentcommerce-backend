@@ -73,6 +73,24 @@ function validate(req, res, next) {
   next();
 }
 
+function getSafeSubmitErrorMessage(err) {
+  const message = String(err?.message || "");
+
+  if (message.includes("ENCRYPTION_KEY must be set")) {
+    return "Server setup error: ENCRYPTION_KEY is missing or invalid.";
+  }
+
+  if (message.includes("EMAIL_NOT_CONFIGURED")) {
+    return "Server setup error: email is not configured.";
+  }
+
+  if (message.includes("UNIQUE constraint failed") || message.includes("already registered")) {
+    return "This email is already registered. Please log in instead.";
+  }
+
+  return "Failed to process submission. Please try again.";
+}
+
 let _authDb = null;
 
 async function getAuthDb() {
@@ -437,7 +455,7 @@ app.post("/api/submit", [
     });
   } catch (err) {
     console.error("Submit error:", err);
-    res.status(500).json({ message: "Failed to process submission. Please try again." });
+    res.status(500).json({ message: getSafeSubmitErrorMessage(err) });
   }
 });
 
