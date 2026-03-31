@@ -3,7 +3,7 @@ const path = require("path");
 const fs = require("fs");
 const { Pool } = require("pg");
 
-const DB_PATH = path.join(__dirname, "agentcommerce.db");
+const DB_PATH = process.env.SQLITE_DB_PATH || path.join(__dirname, "agentcommerce.db");
 const USE_POSTGRES = (process.env.DB_TYPE || "").toLowerCase() === "postgres" && !!process.env.DATABASE_URL;
 
 const PLAN_CONFIG = {
