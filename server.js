@@ -465,7 +465,7 @@ app.post("/api/auth/forgot-password", [
       }
     }
 
-    res.json({ success: true, message: "If the email exists, a temporary password has been sent." });
+    res.json({ success: true, message: "Our team checks if your email exists. If it exists, we send a password reset email to your inbox." });
   } catch (err) {
     console.error("Forgot password error:", err);
     const message = err.message === "EMAIL_NOT_CONFIGURED"
