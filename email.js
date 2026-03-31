@@ -155,12 +155,53 @@ async function sendMailWithLogging(mailOptions, label) {
 
 async function sendAdminEmail({ submission }) {
   const {
-    id, storeUrl, platform, storeName, contactEmail,
-    categories, deliveryMethods, returnPolicy, faqs, notes,
+    id,
+    storeUrl,
+    platform,
+    storeName,
+    contactEmail,
+    loginEmail,
+    phoneNumber,
+    hasPhysicalStore,
+    storeAddress,
+    plan,
+    billingCycle,
+    categories,
+    deliveryMethods,
+    returnPolicy,
+    faqs,
+    notes,
+    qnaPairs,
+    storeAnswers,
+    fullDetails,
   } = submission;
 
   const cats = Array.isArray(categories) ? categories.join(", ") : categories || "-";
   const dels = Array.isArray(deliveryMethods) ? deliveryMethods.join(", ") : deliveryMethods || "-";
+  const qaHtml = Array.isArray(qnaPairs) && qnaPairs.length
+    ? qnaPairs
+        .map((pair, index) => `
+          <div style="padding:12px 0;border-top:1px solid rgba(255,255,255,0.06);">
+            <div style="color:#a78bfa;font-size:12px;font-weight:700;margin-bottom:4px;">Q${index + 1}</div>
+            <div style="color:#e2e8f0;font-size:13px;line-height:1.6;margin-bottom:8px;">${pair.question || "-"}</div>
+            <div style="color:#94a3b8;font-size:12px;font-weight:700;margin-bottom:4px;">Answer</div>
+            <div style="color:#cbd5e1;font-size:13px;line-height:1.6;">${pair.answer || "-"}</div>
+          </div>
+        `)
+        .join("")
+    : "<div style=\"color:#94a3b8;font-size:13px;\">No custom Q&A added.</div>";
+
+  const answerRows = storeAnswers && typeof storeAnswers === "object"
+    ? Object.entries(storeAnswers)
+        .map(([key, value]) => `
+          <tr>
+            <td style="padding:10px 12px;background:#252535;border-radius:4px;color:#94a3b8;font-size:13px;font-weight:600;width:180px;">${key}</td>
+            <td style="padding:10px 12px;color:#e2e8f0;font-size:13px;">${String(value || "-")}</td>
+          </tr>
+          <tr><td colspan="2" style="height:4px;"></td></tr>
+        `)
+        .join("")
+    : "";
 
   const html = `
 <!DOCTYPE html>
@@ -179,7 +220,13 @@ async function sendAdminEmail({ submission }) {
         ["Store Name", storeName],
         ["Store URL", `<a href="${storeUrl}" style="color:#a78bfa;">${storeUrl}</a>`],
         ["Platform", String(platform || "").toUpperCase()],
-        ["Contact", `<a href="mailto:${contactEmail}" style="color:#a78bfa;">${contactEmail}</a>`],
+        ["Store Contact Email", `<a href="mailto:${contactEmail}" style="color:#a78bfa;">${contactEmail}</a>`],
+        ["Dashboard Login Email", loginEmail ? `<a href="mailto:${loginEmail}" style="color:#a78bfa;">${loginEmail}</a>` : "-"],
+        ["Phone Number", phoneNumber || "-"],
+        ["Plan", plan || "-"],
+        ["Billing Cycle", billingCycle || "-"],
+        ["Physical Store", hasPhysicalStore ? "Yes" : "No"],
+        ["Address", storeAddress || "-"],
         ["Categories", cats],
         ["Delivery", dels],
       ].map(([k, v]) => `
@@ -190,9 +237,16 @@ async function sendAdminEmail({ submission }) {
         <tr><td colspan="2" style="height:4px;"></td></tr>
       `).join("")}
     </table>
+    ${answerRows ? `<h2 style="color:#a78bfa;font-size:14px;text-transform:uppercase;letter-spacing:0.1em;margin:0 0 8px;">Store Answers</h2><table style="width:100%;border-collapse:collapse;margin-bottom:24px;">${answerRows}</table>` : ""}
     ${returnPolicy ? `<h2 style="color:#a78bfa;font-size:14px;text-transform:uppercase;letter-spacing:0.1em;margin:0 0 8px;">Return Policy</h2><div style="background:#252535;border-radius:8px;padding:16px;font-size:13px;color:#cbd5e1;line-height:1.6;margin-bottom:20px;">${returnPolicy.replace(/\n/g, "<br>")}</div>` : ""}
     ${faqs ? `<h2 style="color:#a78bfa;font-size:14px;text-transform:uppercase;letter-spacing:0.1em;margin:0 0 8px;">FAQs</h2><div style="background:#252535;border-radius:8px;padding:16px;font-size:13px;color:#cbd5e1;line-height:1.6;margin-bottom:20px;">${faqs.replace(/\n/g, "<br>")}</div>` : ""}
     ${notes ? `<h2 style="color:#a78bfa;font-size:14px;text-transform:uppercase;letter-spacing:0.1em;margin:0 0 8px;">Special Notes</h2><div style="background:#252535;border-radius:8px;padding:16px;font-size:13px;color:#cbd5e1;line-height:1.6;margin-bottom:20px;">${notes.replace(/\n/g, "<br>")}</div>` : ""}
+    <h2 style="color:#a78bfa;font-size:14px;text-transform:uppercase;letter-spacing:0.1em;margin:0 0 8px;">Custom Q&A</h2>
+    <div style="background:#252535;border-radius:8px;padding:16px;font-size:13px;color:#cbd5e1;line-height:1.6;margin-bottom:20px;">${qaHtml}</div>
+    ${fullDetails ? `<h2 style="color:#a78bfa;font-size:14px;text-transform:uppercase;letter-spacing:0.1em;margin:0 0 8px;">Full Submission Copy</h2><pre style="white-space:pre-wrap;background:#111827;border-radius:8px;padding:16px;font-size:12px;color:#cbd5e1;line-height:1.65;overflow:auto;">${String(fullDetails)
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")}</pre>` : ""}
   </div>
 </div>
 </body>
