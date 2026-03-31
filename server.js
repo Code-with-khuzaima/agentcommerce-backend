@@ -3,8 +3,6 @@ const express = require("express");
 const bcrypt = require("bcryptjs");
 const crypto = require("crypto");
 const jwt = require("jsonwebtoken");
-const path = require("path");
-const fs = require("fs");
 const cors = require("cors");
 const helmet = require("helmet");
 const rateLimit = require("express-rate-limit");
@@ -20,7 +18,6 @@ const PORT = process.env.PORT || 4000;
 const JWT_SECRET = process.env.JWT_SECRET || "agentcomerce_jwt_secret_2024";
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || "agentcommerce_admin_2024";
 const ADMIN_SESSION_SECRET = process.env.ADMIN_SESSION_SECRET || JWT_SECRET;
-const DB_PATH = path.join(__dirname, "agentcommerce.db");
 
 app.set("trust proxy", 1);
 
@@ -91,86 +88,8 @@ function getSafeSubmitErrorMessage(err) {
   return "Failed to process submission. Please try again.";
 }
 
-let _authDb = null;
-
-async function getAuthDb() {
-  if (_authDb) return _authDb;
-  const initSqlJs = require("sql.js");
-  const SQL = await initSqlJs();
-  if (fs.existsSync(DB_PATH)) {
-    _authDb = new SQL.Database(fs.readFileSync(DB_PATH));
-  } else {
-    _authDb = new SQL.Database();
-  }
-  return _authDb;
-}
-
-function saveAuthDb() {
-  if (!_authDb) return;
-  fs.writeFileSync(DB_PATH, Buffer.from(_authDb.export()));
-}
-
-async function ensureUsersTable() {
-  const database = await getAuthDb();
-  database.run(`CREATE TABLE IF NOT EXISTS client_users (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    email TEXT UNIQUE NOT NULL,
-    password_hash TEXT NOT NULL,
-    store_id TEXT NOT NULL,
-    is_active INTEGER DEFAULT 1,
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-  )`);
-  saveAuthDb();
-}
-
-async function findClientUserByEmail(email) {
-  const database = await getAuthDb();
-  const stmt = database.prepare("SELECT * FROM client_users WHERE email = ?");
-  stmt.bind([String(email || "").toLowerCase().trim()]);
-  let user = null;
-  if (stmt.step()) user = stmt.getAsObject();
-  stmt.free();
-  return user;
-}
-
 async function getClientUserSummaryByEmail(email) {
-  const user = await findClientUserByEmail(email);
-  if (!user) return null;
-  return {
-    id: Number(user.id),
-    email: user.email,
-    store_id: user.store_id,
-    is_active: Number(user.is_active || 0) === 1,
-    created_at: user.created_at,
-  };
-}
-
-async function createClientUser(email, password, store_id) {
-  const database = await getAuthDb();
-  const stmt = database.prepare("SELECT id FROM client_users WHERE email = ?");
-  stmt.bind([email.toLowerCase()]);
-  const exists = stmt.step();
-  stmt.free();
-  if (exists) return false;
-  const hash = await bcrypt.hash(password, 10);
-  database.run("INSERT INTO client_users (email, password_hash, store_id) VALUES (?, ?, ?)",
-    [email.toLowerCase(), hash, store_id]);
-  saveAuthDb();
-  return true;
-}
-
-async function updateClientPassword(email, password) {
-  const database = await getAuthDb();
-  const hash = await bcrypt.hash(password, 10);
-  database.run("UPDATE client_users SET password_hash = ? WHERE email = ?", [hash, String(email || "").toLowerCase().trim()]);
-  saveAuthDb();
-  return hash;
-}
-
-async function updateClientPasswordHash(email, passwordHash) {
-  const database = await getAuthDb();
-  database.run("UPDATE client_users SET password_hash = ? WHERE email = ?", [passwordHash, String(email || "").toLowerCase().trim()]);
-  saveAuthDb();
+  return db.getClientUserSummaryByEmail(email);
 }
 
 function requireAuth(req, res, next) {
@@ -205,8 +124,6 @@ function requireAdminAuth(req, res, next) {
   }
 }
 
-ensureUsersTable().catch(console.error);
-
 app.get("/api/health", (req, res) => res.json({ status: "ok", ts: new Date().toISOString() }));
 
 app.post("/api/auth/create-client", async (req, res) => {
@@ -216,7 +133,8 @@ app.post("/api/auth/create-client", async (req, res) => {
   }
 
   try {
-    const created = await createClientUser(email, password, store_id);
+    const hash = await bcrypt.hash(password, 10);
+    const created = await db.createClientUser(email, hash, store_id);
     if (!created) return res.status(400).json({ message: "Email already registered" });
     res.status(201).json({ success: true, message: "Client account created successfully" });
   } catch (err) {
@@ -230,14 +148,9 @@ app.post("/api/auth/login", async (req, res) => {
   if (!email || !password) return res.status(400).json({ message: "Email and password required" });
 
   try {
-    const database = await getAuthDb();
-    const stmt = database.prepare("SELECT * FROM client_users WHERE email = ? AND is_active = 1");
-    stmt.bind([email.toLowerCase().trim()]);
-    let user = null;
-    if (stmt.step()) user = stmt.getAsObject();
-    stmt.free();
+    const user = await db.findClientUserByEmail(email);
 
-    if (!user) return res.status(401).json({ message: "Invalid email or password" });
+    if (!user || Number(user.is_active || 0) !== 1) return res.status(401).json({ message: "Invalid email or password" });
 
     const valid = await bcrypt.compare(password, user.password_hash);
     if (!valid) return res.status(401).json({ message: "Invalid email or password" });
@@ -310,13 +223,14 @@ app.post("/api/admin/client-user/reset-password", [
 ], validate, requireAdminAuth, async (req, res) => {
   try {
     const email = String(req.body.email || "").toLowerCase().trim();
-    const user = await findClientUserByEmail(email);
+    const user = await db.findClientUserByEmail(email);
     if (!user) {
       return res.status(404).json({ message: "Client account not found." });
     }
 
     const temporaryPassword = `${crypto.randomBytes(4).toString("hex")}A1`;
-    await updateClientPassword(email, temporaryPassword);
+    const nextHash = await bcrypt.hash(temporaryPassword, 10);
+    await db.updateClientPasswordHash(email, nextHash);
 
     res.json({
       success: true,
@@ -458,7 +372,7 @@ app.post("/api/submit", [
   } = req.body;
 
   try {
-    const existingClient = await findClientUserByEmail(loginEmail);
+    const existingClient = await db.findClientUserByEmail(loginEmail);
     if (existingClient) {
       return res.status(409).json({ message: "This email is already registered. Please log in instead." });
     }
@@ -500,7 +414,8 @@ app.post("/api/submit", [
       platform,
     });
 
-    const created = await createClientUser(loginEmail, accountPassword, submission.storeIdentifier);
+    const passwordHash = await bcrypt.hash(accountPassword, 10);
+    const created = await db.createClientUser(loginEmail, passwordHash, submission.storeIdentifier);
     if (!created) {
       return res.status(409).json({ message: "This email is already registered. Please log in instead." });
     }
@@ -537,7 +452,7 @@ app.post("/api/auth/forgot-password", [
 ], validate, async (req, res) => {
   try {
     const email = String(req.body.email || "").toLowerCase().trim();
-    const user = await findClientUserByEmail(email);
+    const user = await db.findClientUserByEmail(email);
     console.log(`[forgot-password] request for ${email} userFound=${Boolean(user)}`);
 
     if (user) {
@@ -545,7 +460,8 @@ app.post("/api/auth/forgot-password", [
       const previousHash = user.password_hash;
 
       try {
-        await updateClientPassword(email, temporaryPassword);
+        const nextHash = await bcrypt.hash(temporaryPassword, 10);
+        await db.updateClientPasswordHash(email, nextHash);
         await sendPasswordResetEmail({
           to: email,
           temporaryPassword,
@@ -554,7 +470,7 @@ app.post("/api/auth/forgot-password", [
         console.log(`[forgot-password] reset email sent for ${email}`);
       } catch (mailErr) {
         if (previousHash) {
-          await updateClientPasswordHash(email, previousHash);
+          await db.updateClientPasswordHash(email, previousHash);
         }
         console.error(`[forgot-password] mail failed for ${email}:`, mailErr);
         throw mailErr;
