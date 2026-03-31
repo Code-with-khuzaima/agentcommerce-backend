@@ -56,7 +56,18 @@ const PRIORITIES = ["low", "medium", "high", "urgent"];
 
 function validate(req, res, next) {
   const errors = validationResult(req);
-  if (!errors.isEmpty()) return res.status(422).json({ message: "Validation failed", errors: errors.array() });
+  if (!errors.isEmpty()) {
+    const allErrors = errors.array();
+    const firstError = allErrors[0];
+    const field = firstError?.path || firstError?.param;
+    const message = firstError?.msg && firstError.msg !== "Invalid value"
+      ? firstError.msg
+      : field
+        ? `Invalid value for ${field}`
+        : "Validation failed";
+
+    return res.status(422).json({ message, errors: allErrors });
+  }
   next();
 }
 
