@@ -408,11 +408,15 @@ app.post("/api/submit", [
       qnaCount: Array.isArray(qnaPairs) ? qnaPairs.length : 0,
     });
 
-    await db.logEvent(submission.id, "submission_created", {
-      storeIdentifier: submission.storeIdentifier,
-      plan: plan || "starter",
-      platform,
-    });
+    try {
+      await db.logEvent(submission.id, "submission_created", {
+        storeIdentifier: submission.storeIdentifier,
+        plan: plan || "starter",
+        platform,
+      });
+    } catch (logErr) {
+      console.error("Submit warning: submission saved but log creation failed:", logErr);
+    }
 
     let accountCreated = false;
     try {
