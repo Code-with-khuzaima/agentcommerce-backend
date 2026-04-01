@@ -414,10 +414,15 @@ app.post("/api/submit", [
       platform,
     });
 
-    const passwordHash = await bcrypt.hash(accountPassword, 10);
-    const created = await db.createClientUser(loginEmail, passwordHash, submission.storeIdentifier);
-    if (!created) {
-      return res.status(409).json({ message: "This email is already registered. Please log in instead." });
+    let accountCreated = false;
+    try {
+      const passwordHash = await bcrypt.hash(accountPassword, 10);
+      accountCreated = await db.createClientUser(loginEmail, passwordHash, submission.storeIdentifier);
+      if (!accountCreated) {
+        console.warn(`Submit warning: submission ${submission.id} saved but client account already exists for ${loginEmail}`);
+      }
+    } catch (accountErr) {
+      console.error("Submit warning: submission saved but client account creation failed:", accountErr);
     }
 
     Promise.all([
@@ -438,7 +443,10 @@ app.post("/api/submit", [
       storeId: submission.storeIdentifier,
       planPrice: submission.planPrice,
       msgLimit: submission.msgLimit,
-      message: "Submission received. You can now log in with your email and password.",
+      accountCreated,
+      message: accountCreated
+        ? "Submission received. You can now log in with your email and password."
+        : "Submission received. Admin review happens first. Your dashboard login will be finalized after review.",
       loginEmail,
     });
   } catch (err) {
