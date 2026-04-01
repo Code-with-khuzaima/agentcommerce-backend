@@ -3,7 +3,8 @@ const path = require("path");
 const fs = require("fs");
 const { Pool } = require("pg");
 
-const DB_PATH = process.env.SQLITE_DB_PATH || path.join(__dirname, "agentcommerce.db");
+const SQLITE_DB_PATH = process.env.SQLITE_DB_PATH || "";
+const DB_PATH = SQLITE_DB_PATH || path.join(__dirname, "agentcommerce.db");
 const USE_POSTGRES = (process.env.DB_TYPE || "").toLowerCase() === "postgres" && !!process.env.DATABASE_URL;
 
 const PLAN_CONFIG = {
@@ -47,6 +48,9 @@ async function getPgPool() {
 
 async function getSqliteDb() {
   if (sqliteDb) return sqliteDb;
+  if (SQLITE_DB_PATH && !path.isAbsolute(SQLITE_DB_PATH)) {
+    throw new Error(`INVALID_SQLITE_DB_PATH: "${SQLITE_DB_PATH}" must be an absolute path such as "/data/agentcommerce.db"`);
+  }
   const initSqlJs = require("sql.js");
   const SQL = await initSqlJs();
   if (fs.existsSync(DB_PATH)) {
