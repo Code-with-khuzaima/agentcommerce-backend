@@ -9,7 +9,7 @@
  */
 async function validateShopify({ storeUrl, apiKey, accessToken }) {
   if (!apiKey || !accessToken) {
-    throw new Error("API Key and Access Token are required");
+    throw new Error("Client ID and Admin API Access Token are required");
   }
 
   // Clean up store URL — extract just the domain
@@ -32,7 +32,7 @@ async function validateShopify({ storeUrl, apiKey, accessToken }) {
     });
 
     if (response.status === 401) {
-      throw new Error("Invalid credentials. Please check your API Key and Access Token.");
+      throw new Error("Invalid Shopify credentials. Use Client ID and a valid Admin API Access Token that starts with shpat_.");
     }
 
     if (response.status === 403) {
@@ -44,7 +44,7 @@ async function validateShopify({ storeUrl, apiKey, accessToken }) {
     }
 
     if (!response.ok) {
-      throw new Error(`Shopify returned error ${response.status}. Please check your credentials.`);
+      throw new Error(`Shopify returned error ${response.status}. Please verify the store URL and Admin API Access Token.`);
     }
 
     const data = await response.json();
