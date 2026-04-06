@@ -9,7 +9,7 @@
  */
 async function validateShopify({ storeUrl, apiKey, accessToken }) {
   if (!apiKey || !accessToken) {
-    throw new Error("Client ID and Client Secret are required");
+    throw new Error("Client ID and a Shopify credential are required. Use either a Client Secret (shpss_) or an Admin API access token (shpat_).");
   }
 
   // Clean up store URL — extract just the domain
@@ -20,8 +20,9 @@ async function validateShopify({ storeUrl, apiKey, accessToken }) {
 
   let adminAccessToken = accessToken;
 
-  // New Dev Dashboard apps expose client ID + client secret, which must be
-  // exchanged for a short-lived Admin API token before validating API access.
+  // New Dev Dashboard apps can be validated in two ways:
+  // 1. Client ID + client secret (shpss_) via token exchange
+  // 2. Client ID + Admin API access token (shpat_) directly
   if (/^shpss_/i.test(accessToken.trim())) {
     const tokenResponse = await fetch(`https://${domain}/admin/oauth/access_token`, {
       method: "POST",
@@ -54,6 +55,8 @@ async function validateShopify({ storeUrl, apiKey, accessToken }) {
     }
 
     adminAccessToken = tokenData.access_token;
+  } else if (!/^shpat_/i.test(accessToken.trim())) {
+    throw new Error("Invalid Shopify credential format. Use either a Client Secret starting with shpss_ or an Admin API access token starting with shpat_.");
   }
 
   // Build Shopify API URL
@@ -70,7 +73,7 @@ async function validateShopify({ storeUrl, apiKey, accessToken }) {
     });
 
     if (response.status === 401) {
-      throw new Error("Invalid Shopify credentials. Please check your Client ID and Client Secret.");
+      throw new Error("Invalid Shopify credentials. Use your Client ID with either the Client Secret (shpss_) or the Admin API access token (shpat_).");
     }
 
     if (response.status === 403) {
