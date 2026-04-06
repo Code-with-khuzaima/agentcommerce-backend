@@ -9,7 +9,7 @@
  */
 async function validateShopify({ storeUrl, apiKey, accessToken }) {
   if (!apiKey || !accessToken) {
-    throw new Error("Client ID and Admin API Access Token are required");
+    throw new Error("Client ID and Client Secret are required");
   }
 
   // Clean up store URL — extract just the domain
@@ -18,6 +18,44 @@ async function validateShopify({ storeUrl, apiKey, accessToken }) {
     .replace(/\/$/, "")            // remove trailing slash
     .split("/")[0];                // take only domain part
 
+  let adminAccessToken = accessToken;
+
+  // New Dev Dashboard apps expose client ID + client secret, which must be
+  // exchanged for a short-lived Admin API token before validating API access.
+  if (/^shpss_/i.test(accessToken.trim())) {
+    const tokenResponse = await fetch(`https://${domain}/admin/oauth/access_token`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/x-www-form-urlencoded",
+      },
+      body: new URLSearchParams({
+        grant_type: "client_credentials",
+        client_id: apiKey.trim(),
+        client_secret: accessToken.trim(),
+      }).toString(),
+      signal: AbortSignal.timeout(10000),
+    });
+
+    if (tokenResponse.status === 401 || tokenResponse.status === 403) {
+      throw new Error("Invalid Shopify client credentials. Please check your Client ID and Client Secret.");
+    }
+
+    if (tokenResponse.status === 404) {
+      throw new Error("Store not found. Please check your store URL.");
+    }
+
+    if (!tokenResponse.ok) {
+      throw new Error(`Shopify token exchange failed with error ${tokenResponse.status}. Make sure the app is installed and scopes are released.`);
+    }
+
+    const tokenData = await tokenResponse.json();
+    if (!tokenData.access_token) {
+      throw new Error("Shopify did not return an Admin API access token. Make sure your app is installed on the store.");
+    }
+
+    adminAccessToken = tokenData.access_token;
+  }
+
   // Build Shopify API URL
   const url = `https://${domain}/admin/api/2024-01/shop.json`;
 
@@ -25,14 +63,14 @@ async function validateShopify({ storeUrl, apiKey, accessToken }) {
     const response = await fetch(url, {
       method: "GET",
       headers: {
-        "X-Shopify-Access-Token": accessToken,
+        "X-Shopify-Access-Token": adminAccessToken,
         "Content-Type": "application/json",
       },
       signal: AbortSignal.timeout(10000), // 10 second timeout
     });
 
     if (response.status === 401) {
-      throw new Error("Invalid Shopify credentials. Use Client ID and a valid Admin API Access Token that starts with shpat_.");
+      throw new Error("Invalid Shopify credentials. Please check your Client ID and Client Secret.");
     }
 
     if (response.status === 403) {
@@ -44,7 +82,7 @@ async function validateShopify({ storeUrl, apiKey, accessToken }) {
     }
 
     if (!response.ok) {
-      throw new Error(`Shopify returned error ${response.status}. Please verify the store URL and Admin API Access Token.`);
+      throw new Error(`Shopify returned error ${response.status}. Please verify the store URL, app installation, and credentials.`);
     }
 
     const data = await response.json();
