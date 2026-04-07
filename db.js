@@ -520,6 +520,26 @@ async function getStoreDetails(idOrIdentifier) {
   return { ...store, logs };
 }
 
+async function getPublicWidgetConfig(idOrIdentifier) {
+  const store = await getSubmissionById(idOrIdentifier);
+  if (!store) return null;
+
+  return {
+    storeId: store.storeId,
+    storeName: store.storeName,
+    platform: store.platform,
+    plan: store.plan,
+    agentName: store.agentName || "AI Assistant",
+    accentColor: store.accentColor || "#7c3aed",
+    welcomeMessage: store.welcomeMessage || "Welcome! How can I help you today?",
+    webhookUrl: store.webhookUrl || "",
+    leadCaptureEnabled: store.storeAnswers?.receiveLeads !== "no",
+    widgetStatus: store.widgetStatus || "not_installed",
+    setupStatus: store.setupStatus || "new",
+    isActive: store.status === "active" && (store.widgetStatus === "ready" || store.widgetStatus === "live" || store.setupStatus === "live"),
+  };
+}
+
 async function getDashboardSummary() {
   const stores = await listStores({});
   const summary = {
@@ -622,6 +642,38 @@ async function updateStore(id, updates) {
   return getStoreDetails(id);
 }
 
+async function incrementMessageUsage(idOrIdentifier, amount = 1) {
+  const lookup = buildStoreLookupClause(idOrIdentifier);
+  const incrementBy = Math.max(1, Number(amount || 1));
+
+  if (USE_POSTGRES) {
+    const pool = await getPgPool();
+    const clause = lookup.isNumeric ? "id = $2" : "(store_identifier = $2 OR store_url = $2)";
+    const res = await pool.query(
+      `UPDATE stores
+       SET msg_count = COALESCE(msg_count, 0) + $1,
+           last_active_at = $3,
+           updated_at = $3
+       WHERE ${clause}
+       RETURNING *`,
+      [incrementBy, lookup.value, nowIso()]
+    );
+    return hydrateStore(res.rows[0] || null);
+  }
+
+  const database = await getSqliteDb();
+  const now = nowIso();
+  const sql = lookup.isNumeric
+    ? "UPDATE stores SET msg_count = COALESCE(msg_count, 0) + ?, last_active_at = ?, updated_at = ? WHERE id = ?"
+    : "UPDATE stores SET msg_count = COALESCE(msg_count, 0) + ?, last_active_at = ?, updated_at = ? WHERE store_identifier = ? OR store_url = ?";
+  const params = lookup.isNumeric
+    ? [incrementBy, now, now, lookup.value]
+    : [incrementBy, now, now, lookup.value, lookup.value];
+  sqliteRun(database, sql, params);
+  saveSqliteDb();
+  return getStoreDetails(idOrIdentifier);
+}
+
 async function updateSubmissionStatus(id, status) {
   return updateStore(id, { status });
 }
@@ -701,8 +753,10 @@ module.exports = {
   getSubmissionById,
   listStores,
   getStoreDetails,
+  getPublicWidgetConfig,
   getDashboardSummary,
   updateStore,
+  incrementMessageUsage,
   updateSubmissionStatus,
   logEvent,
   findClientUserByEmail,

@@ -126,6 +126,37 @@ function requireAdminAuth(req, res, next) {
 
 app.get("/api/health", (req, res) => res.json({ status: "ok", ts: new Date().toISOString() }));
 
+app.get("/api/widget-config/:storeId", async (req, res) => {
+  try {
+    const config = await db.getPublicWidgetConfig(req.params.storeId);
+    if (!config) return res.status(404).json({ message: "Store not found." });
+    res.json({ success: true, config });
+  } catch (err) {
+    console.error("Widget config error:", err);
+    res.status(500).json({ message: "Failed to load widget configuration." });
+  }
+});
+
+app.post("/api/widget-usage", [
+  body("storeId").isString().trim().notEmpty(),
+  body("amount").optional().isInt({ min: 1, max: 20 }),
+], validate, async (req, res) => {
+  try {
+    const store = await db.incrementMessageUsage(req.body.storeId, req.body.amount || 1);
+    if (!store) return res.status(404).json({ message: "Store not found." });
+    res.json({
+      success: true,
+      storeId: store.storeId,
+      msgCount: store.msgCount,
+      msgLimit: store.msgLimit,
+      usageLeft: store.usageLeft,
+    });
+  } catch (err) {
+    console.error("Widget usage error:", err);
+    res.status(500).json({ message: "Failed to track widget usage." });
+  }
+});
+
 app.post("/api/auth/create-client", async (req, res) => {
   const { email, password, store_id } = req.body;
   if (!email || !password || !store_id) {
