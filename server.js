@@ -257,6 +257,35 @@ app.get("/api/client/dashboard", requireAuth, async (req, res) => {
   }
 });
 
+app.patch("/api/client/dashboard", [
+  body("storeName").optional().isString().isLength({ min: 1, max: 200 }),
+  body("contactEmail").optional().isEmail().normalizeEmail(),
+  body("phoneNumber").optional().isString().isLength({ min: 3, max: 100 }),
+  body("hasPhysicalStore").optional().isBoolean(),
+  body("storeAddress").optional().isString().isLength({ max: 500 }),
+  body("agentName").optional().isString().isLength({ max: 200 }),
+  body("accentColor").optional().matches(/^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/),
+  body("welcomeMessage").optional().isString().isLength({ max: 300 }),
+  body("categories").optional().isArray(),
+  body("categories.*").optional().isString().isLength({ max: 120 }),
+  body("deliveryMethods").optional().isArray(),
+  body("deliveryMethods.*").optional().isString().isLength({ max: 120 }),
+  body("returnPolicy").optional().isString().isLength({ max: 2000 }),
+  body("faqs").optional().isString().isLength({ max: 12000 }),
+  body("notes").optional().isString().isLength({ max: 4000 }),
+  body("storeAnswers").optional().isObject(),
+], validate, requireAuth, async (req, res) => {
+  try {
+    const store = await db.updateStore(req.user.store_id, req.body);
+    if (!store) return res.status(404).json({ message: "Store not found." });
+    await db.logEvent(req.user.store_id, "client_settings_updated", { fields: Object.keys(req.body), at: new Date().toISOString() });
+    res.json({ success: true, store });
+  } catch (err) {
+    console.error("Client dashboard update error:", err);
+    res.status(500).json({ message: "Failed to update dashboard settings." });
+  }
+});
+
 app.get("/api/admin/dashboard", requireAdminAuth, async (req, res) => {
   try {
     const filters = {

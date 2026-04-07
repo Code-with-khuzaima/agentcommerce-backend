@@ -567,9 +567,24 @@ async function updateStore(id, updates) {
 
   const nextPlan = updates.plan || current.plan || "starter";
   const planMeta = getPlanMeta(nextPlan);
+  const nextCategories = updates.categories ?? current.categories ?? [];
+  const nextDeliveryMethods = updates.deliveryMethods ?? current.deliveryMethods ?? [];
+  const nextStoreAnswers = updates.storeAnswers ?? current.storeAnswers ?? {};
+  const nextFaqs = updates.faqs ?? current.faqs ?? "";
+  const nextQnaCount = Number(updates.qnaCount ?? (typeof nextFaqs === "string" ? nextFaqs.split(/\n+/).filter(Boolean).length : current.qnaCount || 0));
   const fields = {
     store_name: updates.storeName ?? current.storeName,
-    contact_email: updates.contactEmail ?? current.contactEmail,
+    contact_email: updates.contactEmail ?? updates.storeContactEmail ?? current.contactEmail,
+    phone_number: updates.phoneNumber ?? current.phoneNumber,
+    has_physical_store: updates.hasPhysicalStore !== undefined ? (updates.hasPhysicalStore ? 1 : 0) : (current.hasPhysicalStore ? 1 : 0),
+    store_address: updates.storeAddress ?? current.storeAddress,
+    categories: JSON.stringify(nextCategories),
+    delivery_methods: JSON.stringify(nextDeliveryMethods),
+    return_policy: updates.returnPolicy ?? current.returnPolicy,
+    faqs: nextFaqs,
+    notes: updates.notes ?? current.notes,
+    store_answers: JSON.stringify(nextStoreAnswers),
+    qna_count: nextQnaCount,
     status: updates.status ?? current.status,
     plan: nextPlan,
     plan_price: updates.planPrice ?? (updates.plan ? planMeta.price : current.planPrice),
