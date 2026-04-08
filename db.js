@@ -25,6 +25,16 @@ function parseJson(value, fallback) {
   }
 }
 
+function decodeHtmlEntities(value) {
+  return String(value || "")
+    .replace(/&#x2F;/gi, "/")
+    .replace(/&#x27;/gi, "'")
+    .replace(/&quot;/gi, '"')
+    .replace(/&amp;/gi, "&")
+    .replace(/&lt;/gi, "<")
+    .replace(/&gt;/gi, ">");
+}
+
 function formatStoreIdentifier(id) {
   return `store_${String(id).padStart(3, "0")}`;
 }
@@ -106,14 +116,14 @@ function hydrateStore(row) {
   return {
     id: Number(row.id),
     storeId: row.store_identifier || formatStoreIdentifier(row.id),
-    storeUrl: row.store_url,
+    storeUrl: decodeHtmlEntities(row.store_url),
     platform: row.platform,
-    storeName: row.store_name,
-    contactEmail: row.contact_email,
+    storeName: decodeHtmlEntities(row.store_name),
+    contactEmail: decodeHtmlEntities(row.contact_email),
     loginEmail: row.login_email || "",
     phoneNumber: row.phone_number || "",
     hasPhysicalStore: Number(row.has_physical_store || 0) === 1,
-    storeAddress: row.store_address || "",
+    storeAddress: decodeHtmlEntities(row.store_address || ""),
     billingCycle: row.billing_cycle || "monthly",
     categories,
     deliveryMethods,

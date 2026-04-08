@@ -9,7 +9,7 @@ const rateLimit = require("express-rate-limit");
 const { body, validationResult } = require("express-validator");
 
 const db = require("./db");
-const { encrypt } = require("./crypto");
+const { encrypt, decrypt } = require("./crypto");
 const { sendAdminEmail, sendConfirmationEmail, sendPasswordResetEmail } = require("./email");
 const { validateShopify, validateWooCommerce } = require("./platformValidator");
 
@@ -132,6 +132,15 @@ function requireN8nToken(req, res, next) {
   return res.status(401).json({ message: "Invalid n8n token." });
 }
 
+function tryDecryptCredential(value) {
+  if (!value) return "";
+  try {
+    return String(value).includes(":") ? decrypt(String(value)) : String(value);
+  } catch {
+    return String(value);
+  }
+}
+
 app.get("/api/health", (req, res) => res.json({ status: "ok", ts: new Date().toISOString() }));
 
 app.get("/api/widget-config/:storeId", async (req, res) => {
@@ -176,12 +185,12 @@ app.get("/api/n8n/store-runtime/:storeId", requireN8nToken, async (req, res) => 
         qnaCount: store.qnaCount || 0,
         webhookUrl: store.webhookUrl || "",
         credentials: {
-          apiKey: credentials.apiKey || credentials.clientId || credentials.consumerKey || "",
-          accessToken: credentials.accessToken || credentials.clientSecret || credentials.consumerSecret || "",
-          clientId: credentials.clientId || credentials.apiKey || "",
-          clientSecret: credentials.clientSecret || credentials.accessToken || "",
-          consumerKey: credentials.consumerKey || credentials.apiKey || "",
-          consumerSecret: credentials.consumerSecret || credentials.accessToken || "",
+          apiKey: tryDecryptCredential(credentials.apiKey || credentials.clientId || credentials.consumerKey || ""),
+          accessToken: tryDecryptCredential(credentials.accessToken || credentials.clientSecret || credentials.consumerSecret || ""),
+          clientId: tryDecryptCredential(credentials.clientId || credentials.apiKey || ""),
+          clientSecret: tryDecryptCredential(credentials.clientSecret || credentials.accessToken || ""),
+          consumerKey: tryDecryptCredential(credentials.consumerKey || credentials.apiKey || ""),
+          consumerSecret: tryDecryptCredential(credentials.consumerSecret || credentials.accessToken || ""),
         },
       },
     };
@@ -461,11 +470,11 @@ app.post("/api/validate-credentials", [
 });
 
 app.post("/api/submit", [
-  body("storeUrl").isURL({ require_protocol: true }).trim().escape(),
+  body("storeUrl").isURL({ require_protocol: true }).trim(),
   body("platform").isIn(["shopify", "woocommerce"]),
   body("plan").optional().isIn(["starter", "pro", "enterprise"]),
   body("billingCycle").optional().isIn(["monthly", "yearly"]),
-  body("storeName").notEmpty().trim().escape().isLength({ max: 200 }),
+  body("storeName").notEmpty().trim().isLength({ max: 200 }),
   body("storeContactEmail").isEmail().normalizeEmail(),
   body("loginEmail").isEmail().normalizeEmail(),
   body("phoneNumber").isString().trim().isLength({ min: 3, max: 100 }),
