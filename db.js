@@ -148,6 +148,8 @@ function hydrateStore(row) {
     welcomeMessage: row.welcome_message || "",
     webhookUrl: row.webhook_url || "",
     internalNotes: row.internal_notes || "",
+    installGuide: row.install_guide || "",
+    installGuideSentAt: row.install_guide_sent_at || null,
     fullDetails: row.full_details || "",
     storeAnswers,
     qnaCount,
@@ -198,6 +200,8 @@ async function initPostgres() {
       welcome_message TEXT DEFAULT '',
       webhook_url TEXT DEFAULT '',
       internal_notes TEXT DEFAULT '',
+      install_guide TEXT DEFAULT '',
+      install_guide_sent_at TIMESTAMPTZ,
       qna_count INTEGER DEFAULT 0,
       full_details TEXT DEFAULT '',
       store_answers TEXT DEFAULT '{}',
@@ -293,6 +297,8 @@ async function initSqlite() {
     ["last_active_at", "DATETIME"],
     ["last_synced_at", "DATETIME"],
     ["internal_notes", "TEXT DEFAULT ''"],
+    ["install_guide", "TEXT DEFAULT ''"],
+    ["install_guide_sent_at", "DATETIME"],
     ["qna_count", "INTEGER DEFAULT 0"],
     ["full_details", "TEXT DEFAULT ''"],
     ["store_answers", "TEXT DEFAULT '{}'"],
@@ -366,10 +372,10 @@ async function createSubmission(payload) {
         delivery_methods, return_policy, faqs, notes, status, plan, plan_price,
         msg_limit, msg_count, payment_status, payment_amount, currency, setup_status,
         workflow_status, widget_status, priority, agent_name, accent_color,
-        welcome_message, webhook_url, internal_notes, qna_count, full_details,
+        welcome_message, webhook_url, internal_notes, install_guide, install_guide_sent_at, qna_count, full_details,
         store_answers, updated_at
       ) VALUES (
-        $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35,$36
+        $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35,$36,$37,$38
       ) RETURNING id`,
       [
         storeUrl, platform, storeName, contactEmail, loginEmail, phoneNumber,
@@ -377,7 +383,7 @@ async function createSubmission(payload) {
         deliveryMethods, returnPolicy, faqs, notes, "pending", plan, planMeta.price,
         planMeta.msgLimit, 0, "pending", planMeta.price, "USD", "new", "not_started",
         "not_installed", "medium", `${storeName} Assistant`, "#7c3aed",
-        `Hi! Welcome to ${storeName}.`, "", "", qnaCount, fullDetails, storeAnswers, nowIso(),
+        `Hi! Welcome to ${storeName}.`, "", "", "", null, qnaCount, fullDetails, storeAnswers, nowIso(),
       ]
     );
     const id = Number(inserted.rows[0].id);
@@ -396,9 +402,9 @@ async function createSubmission(payload) {
        payment_status, payment_amount, currency,
        setup_status, workflow_status, widget_status, priority,
        agent_name, accent_color, welcome_message, webhook_url,
-       internal_notes, qna_count, full_details, store_answers,
+       internal_notes, install_guide, install_guide_sent_at, qna_count, full_details, store_answers,
        billing_cycle, login_email, phone_number, has_physical_store, store_address, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)`,
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)`,
     [
       storeUrl, platform, storeName, contactEmail, credentials,
       categories, deliveryMethods, returnPolicy, faqs, notes,
@@ -406,7 +412,7 @@ async function createSubmission(payload) {
       "pending", planMeta.price, "USD",
       "new", "not_started", "not_installed", "medium",
       `${storeName} Assistant`, "#7c3aed", `Hi! Welcome to ${storeName}.`, "",
-      "", qnaCount, fullDetails, storeAnswers,
+      "", "", null, qnaCount, fullDetails, storeAnswers,
       billingCycle, loginEmail, phoneNumber, hasPhysicalStore ? 1 : 0, storeAddress,
     ]
   );
@@ -631,6 +637,8 @@ async function updateStore(id, updates) {
     accent_color: updates.accentColor ?? current.accentColor,
     welcome_message: updates.welcomeMessage ?? current.welcomeMessage,
     internal_notes: updates.internalNotes ?? current.internalNotes,
+    install_guide: updates.installGuide ?? current.installGuide,
+    install_guide_sent_at: updates.installGuideSentAt ?? current.installGuideSentAt,
     last_active_at: updates.lastActiveAt ?? current.lastActiveAt,
     last_synced_at: updates.lastSyncedAt ?? current.lastSyncedAt,
     updated_at: nowIso(),

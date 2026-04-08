@@ -10,7 +10,7 @@ const { body, validationResult } = require("express-validator");
 
 const db = require("./db");
 const { encrypt, decrypt } = require("./crypto");
-const { sendAdminEmail, sendConfirmationEmail, sendPasswordResetEmail } = require("./email");
+const { sendAdminEmail, sendConfirmationEmail, sendPasswordResetEmail, sendInstallGuideEmail } = require("./email");
 const { validateShopify, validateWooCommerce } = require("./platformValidator");
 
 const app = express();
@@ -581,6 +581,50 @@ app.post("/api/submit", [
   } catch (err) {
     console.error("Submit error:", err);
     res.status(500).json({ message: getSafeSubmitErrorMessage(err) });
+  }
+});
+
+app.post("/api/admin/stores/:id/send-install-guide", [
+  body("email").isEmail().normalizeEmail(),
+  body("installGuide").isString().trim().isLength({ min: 10, max: 12000 }),
+], validate, requireAdminAuth, async (req, res) => {
+  try {
+    const store = await db.getStoreDetails(req.params.id);
+    if (!store) return res.status(404).json({ message: "Store not found." });
+
+    const email = String(req.body.email || "").toLowerCase().trim();
+    const installGuide = String(req.body.installGuide || "").trim();
+    const sentAt = new Date().toISOString();
+
+    await sendInstallGuideEmail({
+      to: email,
+      storeName: store.storeName || "Your Store",
+      installGuide,
+    });
+
+    const updated = await db.updateStore(req.params.id, {
+      installGuide,
+      installGuideSentAt: sentAt,
+    });
+
+    await db.logEvent(req.params.id, "install_guide_sent", {
+      email,
+      sentAt,
+    });
+
+    res.json({
+      success: true,
+      message: "Install guide sent.",
+      store: updated,
+      sentTo: email,
+      sentAt,
+    });
+  } catch (err) {
+    console.error("Send install guide error:", err);
+    const message = err.message === "EMAIL_NOT_CONFIGURED"
+      ? "Install guide email is not configured on the server yet."
+      : "Failed to send install guide.";
+    res.status(500).json({ message });
   }
 });
 
