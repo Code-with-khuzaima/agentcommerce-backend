@@ -18,6 +18,7 @@ const PORT = process.env.PORT || 4000;
 const JWT_SECRET = process.env.JWT_SECRET || "agentcomerce_jwt_secret_2024";
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || "agentcommerce_admin_2024";
 const ADMIN_SESSION_SECRET = process.env.ADMIN_SESSION_SECRET || JWT_SECRET;
+const N8N_SHARED_TOKEN = process.env.AGENTCOMERCE_N8N_TOKEN || "";
 
 app.set("trust proxy", 1);
 
@@ -124,6 +125,13 @@ function requireAdminAuth(req, res, next) {
   }
 }
 
+function requireN8nToken(req, res, next) {
+  if (!N8N_SHARED_TOKEN) return next();
+  const provided = req.headers["x-n8n-token"];
+  if (verifySecret(provided, N8N_SHARED_TOKEN)) return next();
+  return res.status(401).json({ message: "Invalid n8n token." });
+}
+
 app.get("/api/health", (req, res) => res.json({ status: "ok", ts: new Date().toISOString() }));
 
 app.get("/api/widget-config/:storeId", async (req, res) => {
@@ -134,6 +142,54 @@ app.get("/api/widget-config/:storeId", async (req, res) => {
   } catch (err) {
     console.error("Widget config error:", err);
     res.status(500).json({ message: "Failed to load widget configuration." });
+  }
+});
+
+app.get("/api/n8n/store-runtime/:storeId", requireN8nToken, async (req, res) => {
+  try {
+    const store = await db.getStoreDetails(req.params.storeId);
+    if (!store) return res.status(404).json({ message: "Store not found." });
+
+    const credentials = store.credentials || {};
+    const runtime = {
+      store: {
+        id: store.id,
+        storeId: store.storeId,
+        storeName: store.storeName,
+        storeUrl: store.storeUrl,
+        platform: store.platform,
+        plan: store.plan,
+        msgCount: store.msgCount,
+        msgLimit: store.msgLimit,
+        usageLeft: store.usageLeft,
+        resetDate: new Date().toISOString().split("T")[0],
+        status: store.status,
+        setupStatus: store.setupStatus,
+        workflowStatus: store.workflowStatus,
+        widgetStatus: store.widgetStatus,
+        categories: store.categories || [],
+        deliveryMethods: store.deliveryMethods || [],
+        returnPolicy: store.returnPolicy || "",
+        faqs: store.faqs || "",
+        notes: store.notes || "",
+        storeAnswers: store.storeAnswers || {},
+        qnaCount: store.qnaCount || 0,
+        webhookUrl: store.webhookUrl || "",
+        credentials: {
+          apiKey: credentials.apiKey || credentials.clientId || credentials.consumerKey || "",
+          accessToken: credentials.accessToken || credentials.clientSecret || credentials.consumerSecret || "",
+          clientId: credentials.clientId || credentials.apiKey || "",
+          clientSecret: credentials.clientSecret || credentials.accessToken || "",
+          consumerKey: credentials.consumerKey || credentials.apiKey || "",
+          consumerSecret: credentials.consumerSecret || credentials.accessToken || "",
+        },
+      },
+    };
+
+    res.json({ success: true, runtime });
+  } catch (err) {
+    console.error("n8n store runtime error:", err);
+    res.status(500).json({ message: "Failed to load store runtime." });
   }
 });
 
