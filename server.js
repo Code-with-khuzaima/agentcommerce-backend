@@ -11,6 +11,7 @@ const { body, validationResult } = require("express-validator");
 const db = require("./db");
 const { encrypt, decrypt } = require("./crypto");
 const { sendAdminEmail, sendConfirmationEmail, sendPasswordResetEmail, sendInstallGuideEmail } = require("./email");
+const { buildInstallGuideTemplate } = require("./installGuideTemplates");
 const { validateShopify, validateWooCommerce } = require("./platformValidator");
 
 const app = express();
@@ -346,7 +347,11 @@ app.post("/api/admin/client-user/reset-password", [
 app.get("/api/client/dashboard", requireAuth, async (req, res) => {
   try {
     const store = await db.getStoreDetails(req.user.store_id).catch(() => null);
-    res.json({ success: true, store, user: { email: req.user.email, store_id: req.user.store_id } });
+    res.json({
+      success: true,
+      store: store ? { ...store, defaultInstallGuide: buildInstallGuideTemplate(store) } : null,
+      user: { email: req.user.email, store_id: req.user.store_id },
+    });
   } catch (err) {
     console.error("Dashboard error:", err);
     res.status(500).json({ message: "Failed to load dashboard" });
@@ -404,7 +409,7 @@ app.get("/api/admin/stores/:id", requireAdminAuth, async (req, res) => {
   try {
     const store = await db.getStoreDetails(req.params.id);
     if (!store) return res.status(404).json({ message: "Store not found." });
-    res.json({ success: true, store });
+    res.json({ success: true, store: { ...store, defaultInstallGuide: buildInstallGuideTemplate(store) } });
   } catch (err) {
     console.error("Admin store detail error:", err);
     res.status(500).json({ message: "Failed to load store details." });
@@ -586,14 +591,14 @@ app.post("/api/submit", [
 
 app.post("/api/admin/stores/:id/send-install-guide", [
   body("email").isEmail().normalizeEmail(),
-  body("installGuide").isString().trim().isLength({ min: 10, max: 12000 }),
+  body("installGuide").optional().isString().trim().isLength({ max: 12000 }),
 ], validate, requireAdminAuth, async (req, res) => {
   try {
     const store = await db.getStoreDetails(req.params.id);
     if (!store) return res.status(404).json({ message: "Store not found." });
 
     const email = String(req.body.email || "").toLowerCase().trim();
-    const installGuide = String(req.body.installGuide || "").trim();
+    const installGuide = String(req.body.installGuide || "").trim() || buildInstallGuideTemplate(store);
     const sentAt = new Date().toISOString();
 
     await sendInstallGuideEmail({
