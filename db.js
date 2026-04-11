@@ -649,15 +649,15 @@ async function updateStore(id, updates) {
     const keys = Object.keys(fields);
     const values = Object.values(fields);
     const setClause = keys.map((key, index) => `${key} = $${index + 1}`).join(", ");
-    await pool.query(`UPDATE stores SET ${setClause} WHERE id = $${keys.length + 1}`, [...values, Number(id)]);
-    return getStoreDetails(id);
+    await pool.query(`UPDATE stores SET ${setClause} WHERE id = $${keys.length + 1}`, [...values, current.id]);
+    return getStoreDetails(current.id);
   }
 
   const database = await getSqliteDb();
   const setClause = Object.keys(fields).map((key) => `${key} = ?`).join(", ");
-  sqliteRun(database, `UPDATE stores SET ${setClause} WHERE id = ?`, [...Object.values(fields), Number(id)]);
+  sqliteRun(database, `UPDATE stores SET ${setClause} WHERE id = ?`, [...Object.values(fields), current.id]);
   saveSqliteDb();
-  return getStoreDetails(id);
+  return getStoreDetails(current.id);
 }
 
 async function incrementMessageUsage(idOrIdentifier, amount = 1) {
@@ -697,19 +697,22 @@ async function updateSubmissionStatus(id, status) {
 }
 
 async function logEvent(storeId, event, payload) {
+  const store = await getSubmissionById(storeId);
+  if (!store) return;
+
   if (USE_POSTGRES) {
     const pool = await getPgPool();
     await pool.query(
       "INSERT INTO integration_logs (store_id, event, payload) VALUES ($1, $2, $3)",
-      [Number(storeId), event, JSON.stringify(payload || {})]
+      [store.id, event, JSON.stringify(payload || {})]
     );
-    await pool.query("UPDATE stores SET updated_at = $1 WHERE id = $2", [nowIso(), Number(storeId)]);
+    await pool.query("UPDATE stores SET updated_at = $1 WHERE id = $2", [nowIso(), store.id]);
     return;
   }
 
   const database = await getSqliteDb();
-  sqliteRun(database, "INSERT INTO integration_logs (store_id, event, payload) VALUES (?, ?, ?)", [Number(storeId), event, JSON.stringify(payload || {})]);
-  sqliteRun(database, "UPDATE stores SET updated_at = CURRENT_TIMESTAMP WHERE id = ?", [Number(storeId)]);
+  sqliteRun(database, "INSERT INTO integration_logs (store_id, event, payload) VALUES (?, ?, ?)", [store.id, event, JSON.stringify(payload || {})]);
+  sqliteRun(database, "UPDATE stores SET updated_at = CURRENT_TIMESTAMP WHERE id = ?", [store.id]);
   saveSqliteDb();
 }
 
