@@ -6,6 +6,10 @@ const { Pool } = require("pg");
 const SQLITE_DB_PATH = process.env.SQLITE_DB_PATH || "";
 const DB_PATH = SQLITE_DB_PATH || path.join(__dirname, "agentcommerce.db");
 const USE_POSTGRES = (process.env.DB_TYPE || "").toLowerCase() === "postgres" && !!process.env.DATABASE_URL;
+const DB_SSL = /^(1|true|yes|require)$/i.test(String(process.env.DB_SSL || (USE_POSTGRES ? "true" : "false")));
+const PG_CONNECTION_TIMEOUT_MS = Number(process.env.PG_CONNECTION_TIMEOUT_MS || 10000);
+const PG_IDLE_TIMEOUT_MS = Number(process.env.PG_IDLE_TIMEOUT_MS || 30000);
+const PG_QUERY_TIMEOUT_MS = Number(process.env.PG_QUERY_TIMEOUT_MS || 15000);
 
 const PLAN_CONFIG = {
   starter: { price: 19, msgLimit: 5000 },
@@ -51,7 +55,15 @@ async function getPgPool() {
   if (pgPool) return pgPool;
   pgPool = new Pool({
     connectionString: process.env.DATABASE_URL,
-    ssl: process.env.NODE_ENV === "production" ? { rejectUnauthorized: false } : false,
+    ssl: DB_SSL ? { rejectUnauthorized: false } : false,
+    connectionTimeoutMillis: PG_CONNECTION_TIMEOUT_MS,
+    idleTimeoutMillis: PG_IDLE_TIMEOUT_MS,
+    query_timeout: PG_QUERY_TIMEOUT_MS,
+    statement_timeout: PG_QUERY_TIMEOUT_MS,
+    keepAlive: true,
+  });
+  pgPool.on("error", (err) => {
+    console.error("Postgres pool error:", err);
   });
   return pgPool;
 }
@@ -164,6 +176,7 @@ function hydrateStore(row) {
 
 async function initPostgres() {
   const pool = await getPgPool();
+  await pool.query("SELECT 1");
   await pool.query(`
     CREATE TABLE IF NOT EXISTS stores (
       id SERIAL PRIMARY KEY,
