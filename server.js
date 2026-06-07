@@ -23,7 +23,13 @@ const N8N_SHARED_TOKEN = process.env.AGENTCOMERCE_N8N_TOKEN || "";
 
 app.set("trust proxy", 1);
 
-const allowedOrigins = (process.env.CORS_ORIGIN || "")
+const defaultCorsOrigins = [
+  "http://localhost:3000",
+  "https://agentcommerce-frontend-git-master-code-with-khuzaimas-projects.vercel.app",
+  "https://agentcommerce-frontend.vercel.app",
+];
+
+const allowedOrigins = (process.env.CORS_ORIGIN || defaultCorsOrigins.join(","))
   .split(",").map((origin) => origin.trim()).filter(Boolean);
 
 function isAllowedOrigin(origin) {
@@ -142,6 +148,7 @@ function tryDecryptCredential(value) {
   }
 }
 
+app.get("/", (req, res) => res.json({ service: "agentcommerce-backend", status: "ok" }));
 app.get("/api/health", (req, res) => res.json({ status: "ok", ts: new Date().toISOString() }));
 
 app.get("/api/widget-config/:storeId", async (req, res) => {

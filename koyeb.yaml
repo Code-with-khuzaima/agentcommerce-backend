@@ -1,0 +1,15 @@
+name: agentcommerce-backend
+services:
+  - name: api
+    type: web
+    git:
+      branch: master
+      build_command: npm ci
+      run_command: npm start
+    ports:
+      - port: 4000
+        protocol: http
+    health_checks:
+      - port: 4000
+        path: /api/health
+        protocol: http
