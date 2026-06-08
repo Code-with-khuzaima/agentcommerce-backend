@@ -150,6 +150,10 @@ function tryDecryptCredential(value) {
 
 app.get("/", (req, res) => res.json({ service: "agentcommerce-backend", status: "ok" }));
 app.get("/api/health", (req, res) => res.json({ status: "ok", ts: new Date().toISOString() }));
+app.get("/api/health/db", async (req, res) => {
+  const health = await db.getSafeDatabaseHealth();
+  res.status(health.ok ? 200 : 503).json(health);
+});
 
 app.get("/api/widget-config/:storeId", async (req, res) => {
   try {

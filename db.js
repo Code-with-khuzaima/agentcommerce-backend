@@ -610,6 +610,43 @@ async function getDashboardSummary() {
   return summary;
 }
 
+async function checkDatabaseHealth() {
+  if (USE_POSTGRES) {
+    const pool = await getPgPool();
+    const res = await pool.query("SELECT current_database() AS database_name, current_user AS database_user, NOW() AS checked_at");
+    return {
+      ok: true,
+      mode: "postgres",
+      database: res.rows[0]?.database_name || "",
+      user: res.rows[0]?.database_user || "",
+      checkedAt: res.rows[0]?.checked_at || null,
+    };
+  }
+
+  const database = await getSqliteDb();
+  const tables = sqliteQueryAll(database, "SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name").map((row) => row.name);
+  return {
+    ok: true,
+    mode: "sqlite",
+    databasePath: DB_PATH,
+    tables,
+    checkedAt: nowIso(),
+  };
+}
+
+async function getSafeDatabaseHealth() {
+  try {
+    return await checkDatabaseHealth();
+  } catch (err) {
+    return {
+      ok: false,
+      mode: USE_POSTGRES ? "postgres" : "sqlite",
+      error: err?.code || err?.name || "DATABASE_ERROR",
+      message: err?.message || "Database health check failed.",
+    };
+  }
+}
+
 async function updateStore(id, updates) {
   const current = await getSubmissionById(id);
   if (!current) return null;
@@ -797,6 +834,7 @@ module.exports = {
   getClientUserSummaryByEmail,
   createClientUser,
   updateClientPasswordHash,
+  getSafeDatabaseHealth,
   usePostgres: USE_POSTGRES,
 };
 
