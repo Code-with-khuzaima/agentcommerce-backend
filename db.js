@@ -20,6 +20,24 @@ const PLAN_CONFIG = {
 let sqliteDb = null;
 let pgPool = null;
 
+function getPostgresConnectionString() {
+  const raw = process.env.DATABASE_URL || "";
+  const directHostMatch = raw.match(/@db\.([a-z0-9]+)\.supabase\.co(?::5432)?/i);
+  if (!directHostMatch) return raw;
+
+  const projectRef = directHostMatch[1];
+  const poolerHost = process.env.SUPABASE_POOLER_HOST || "aws-1-us-east-1.pooler.supabase.com";
+  const protocolMatch = raw.match(/^(postgres(?:ql)?:\/\/)/i);
+  const protocol = protocolMatch ? protocolMatch[1] : "postgresql://";
+  const authStart = protocolMatch ? protocol.length : 0;
+  const auth = raw.slice(authStart, directHostMatch.index);
+  const password = auth.startsWith("postgres:") ? auth.slice("postgres:".length) : auth.split(":").slice(1).join(":");
+  const pathStart = raw.indexOf("/", directHostMatch.index + 1);
+  const path = pathStart >= 0 ? raw.slice(pathStart).replace(/^\/postgres\b.*/, "/postgres") : "/postgres";
+
+  return `${protocol}postgres.${projectRef}:${password}@${poolerHost}:6543${path}`;
+}
+
 function parseJson(value, fallback) {
   if (!value) return fallback;
   try {
@@ -54,7 +72,7 @@ function nowIso() {
 async function getPgPool() {
   if (pgPool) return pgPool;
   pgPool = new Pool({
-    connectionString: process.env.DATABASE_URL,
+    connectionString: getPostgresConnectionString(),
     ssl: DB_SSL ? { rejectUnauthorized: false } : false,
     connectionTimeoutMillis: PG_CONNECTION_TIMEOUT_MS,
     idleTimeoutMillis: PG_IDLE_TIMEOUT_MS,
