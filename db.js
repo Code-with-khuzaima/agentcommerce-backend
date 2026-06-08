@@ -174,7 +174,8 @@ function hydrateStore(row) {
     widgetStatus: row.widget_status || "not_installed",
     priority: row.priority || "medium",
     agentName: row.agent_name || "",
-    accentColor: row.accent_color || "#7c3aed",
+    accentColor: row.accent_color || "#0f766e",
+    secondaryColor: row.secondary_color || "#111827",
     welcomeMessage: row.welcome_message || "",
     webhookUrl: row.webhook_url || "",
     internalNotes: row.internal_notes || "",
@@ -227,7 +228,8 @@ async function initPostgres() {
       widget_status TEXT DEFAULT 'not_installed',
       priority TEXT DEFAULT 'medium',
       agent_name TEXT DEFAULT '',
-      accent_color TEXT DEFAULT '#7c3aed',
+      accent_color TEXT DEFAULT '#0f766e',
+      secondary_color TEXT DEFAULT '#111827',
       welcome_message TEXT DEFAULT '',
       webhook_url TEXT DEFAULT '',
       internal_notes TEXT DEFAULT '',
@@ -266,6 +268,7 @@ async function initPostgres() {
 
   await pool.query("CREATE INDEX IF NOT EXISTS idx_stores_identifier ON stores(store_identifier)");
   await pool.query("CREATE INDEX IF NOT EXISTS idx_logs_store_id ON integration_logs(store_id)");
+  await pool.query("ALTER TABLE stores ADD COLUMN IF NOT EXISTS secondary_color TEXT DEFAULT '#111827'");
 }
 
 async function initSqlite() {
@@ -322,7 +325,8 @@ async function initSqlite() {
     ["priority", "TEXT DEFAULT 'medium'"],
     ["store_identifier", "TEXT"],
     ["agent_name", "TEXT DEFAULT ''"],
-    ["accent_color", "TEXT DEFAULT '#7c3aed'"],
+    ["accent_color", "TEXT DEFAULT '#0f766e'"],
+    ["secondary_color", "TEXT DEFAULT '#111827'"],
     ["welcome_message", "TEXT DEFAULT ''"],
     ["webhook_url", "TEXT DEFAULT ''"],
     ["last_active_at", "DATETIME"],
@@ -402,18 +406,18 @@ async function createSubmission(payload) {
         has_physical_store, store_address, billing_cycle, credentials, categories,
         delivery_methods, return_policy, faqs, notes, status, plan, plan_price,
         msg_limit, msg_count, payment_status, payment_amount, currency, setup_status,
-        workflow_status, widget_status, priority, agent_name, accent_color,
+        workflow_status, widget_status, priority, agent_name, accent_color, secondary_color,
         welcome_message, webhook_url, internal_notes, install_guide, install_guide_sent_at, qna_count, full_details,
         store_answers, updated_at
       ) VALUES (
-        $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35,$36,$37,$38
+        $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35,$36,$37,$38,$39
       ) RETURNING id`,
       [
         storeUrl, platform, storeName, contactEmail, loginEmail, phoneNumber,
         hasPhysicalStore ? 1 : 0, storeAddress, billingCycle, credentials, categories,
         deliveryMethods, returnPolicy, faqs, notes, "pending", plan, planMeta.price,
         planMeta.msgLimit, 0, "pending", planMeta.price, "USD", "new", "not_started",
-        "not_installed", "medium", `${storeName} Assistant`, "#7c3aed",
+        "not_installed", "medium", `${storeName} Assistant`, "#0f766e", "#111827",
         `Hi! Welcome to ${storeName}.`, "", "", "", null, qnaCount, fullDetails, storeAnswers, nowIso(),
       ]
     );
@@ -432,17 +436,17 @@ async function createSubmission(payload) {
        status, plan, plan_price, msg_limit, msg_count,
        payment_status, payment_amount, currency,
        setup_status, workflow_status, widget_status, priority,
-       agent_name, accent_color, welcome_message, webhook_url,
+       agent_name, accent_color, secondary_color, welcome_message, webhook_url,
        internal_notes, install_guide, install_guide_sent_at, qna_count, full_details, store_answers,
        billing_cycle, login_email, phone_number, has_physical_store, store_address, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)`,
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)`,
     [
       storeUrl, platform, storeName, contactEmail, credentials,
       categories, deliveryMethods, returnPolicy, faqs, notes,
       "pending", plan, planMeta.price, planMeta.msgLimit, 0,
       "pending", planMeta.price, "USD",
       "new", "not_started", "not_installed", "medium",
-      `${storeName} Assistant`, "#7c3aed", `Hi! Welcome to ${storeName}.`, "",
+      `${storeName} Assistant`, "#0f766e", "#111827", `Hi! Welcome to ${storeName}.`, "",
       "", "", null, qnaCount, fullDetails, storeAnswers,
       billingCycle, loginEmail, phoneNumber, hasPhysicalStore ? 1 : 0, storeAddress,
     ]
@@ -577,7 +581,8 @@ async function getPublicWidgetConfig(idOrIdentifier) {
     platform: store.platform,
     plan: store.plan,
     agentName: store.agentName || "AI Assistant",
-    accentColor: store.accentColor || "#7c3aed",
+    accentColor: store.accentColor || "#0f766e",
+    secondaryColor: store.secondaryColor || "#111827",
     welcomeMessage: store.welcomeMessage || "Welcome! How can I help you today?",
     webhookUrl: store.webhookUrl || "",
     leadCaptureEnabled: store.storeAnswers?.receiveLeads !== "no",
@@ -703,6 +708,7 @@ async function updateStore(id, updates) {
     webhook_url: updates.webhookUrl ?? current.webhookUrl,
     agent_name: updates.agentName ?? current.agentName,
     accent_color: updates.accentColor ?? current.accentColor,
+    secondary_color: updates.secondaryColor ?? current.secondaryColor,
     welcome_message: updates.welcomeMessage ?? current.welcomeMessage,
     internal_notes: updates.internalNotes ?? current.internalNotes,
     install_guide: updates.installGuide ?? current.installGuide,

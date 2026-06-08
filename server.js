@@ -377,6 +377,7 @@ app.patch("/api/client/dashboard", [
   body("storeAddress").optional().isString().isLength({ max: 500 }),
   body("agentName").optional().isString().isLength({ max: 200 }),
   body("accentColor").optional().matches(/^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/),
+  body("secondaryColor").optional().matches(/^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/),
   body("welcomeMessage").optional().isString().isLength({ max: 300 }),
   body("categories").optional().isArray(),
   body("categories.*").optional().isString().isLength({ max: 120 }),
@@ -440,6 +441,7 @@ app.patch("/api/admin/stores/:id", [
   body("webhookUrl").optional().isString().isLength({ max: 1000 }),
   body("agentName").optional().isString().isLength({ max: 200 }),
   body("accentColor").optional().matches(/^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/),
+  body("secondaryColor").optional().matches(/^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/),
   body("welcomeMessage").optional().isString().isLength({ max: 300 }),
   body("internalNotes").optional().isString().isLength({ max: 6000 }),
 ], validate, requireAdminAuth, async (req, res) => {
